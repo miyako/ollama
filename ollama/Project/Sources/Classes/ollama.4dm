@@ -16,7 +16,57 @@ Function terminate()
 	
 	This:C1470.controller.terminate()
 	
-Function create($option : Object; $formula : 4D:C1709.Function)
+Function _simple($function : Text; $option : Object; $formula : 4D:C1709.Function) : 4D:C1709.SystemWorker
+	
+	If (Not:C34(cs:C1710.server.new().isRunning()))
+		return 
+	End if 
+	
+	var $isAsync : Boolean
+	
+	If (OB Instance of:C1731($formula; 4D:C1709.Function))
+		$isAsync:=True:C214
+		This:C1470.controller.onResponse:=$formula
+	End if 
+	
+	var $command : Text
+	$command:=This:C1470.escape(This:C1470.executablePath)
+	$command+=" "
+	$command+=$function
+	
+	If (Value type:C1509($option.name)=Is text:K8:3) && ($option.name#"")
+		$command+=" "
+		$command+=This:C1470.escape($option.name)
+	End if 
+	
+	This:C1470.controller.variables.HOME:=Folder:C1567(fk home folder:K87:24).path
+	This:C1470.controller.variables.GIN_MODE:="release"
+	This:C1470.controller.variables.OLLAMA_HOST:=Storage:C1525.variables.OLLAMA_HOST
+	
+	var $worker : 4D:C1709.SystemWorker
+	$worker:=This:C1470.controller.execute($command; Null:C1517; $option.data).worker
+	
+	If (Not:C34($isAsync))
+		$worker.wait()
+	End if 
+	
+	If (Not:C34($isAsync))
+		return $worker
+	End if 
+	
+Function pull($option : Object; $formula : 4D:C1709.Function) : 4D:C1709.SystemWorker
+	
+	return This:C1470._simple("pull"; $option; $formula)
+	
+Function stop($option : Object; $formula : 4D:C1709.Function) : 4D:C1709.SystemWorker
+	
+	return This:C1470._simple("stop"; $option; $formula)
+	
+Function rm($option : Object; $formula : 4D:C1709.Function) : 4D:C1709.SystemWorker
+	
+	return This:C1470._simple("rm"; $option; $formula)
+	
+Function create($option : Object; $formula : 4D:C1709.Function) : 4D:C1709.SystemWorker
 	
 	If (Not:C34(cs:C1710.server.new().isRunning()))
 		return 
@@ -51,18 +101,12 @@ Function create($option : Object; $formula : 4D:C1709.Function)
 	var $worker : 4D:C1709.SystemWorker
 	$worker:=This:C1470.controller.execute($command; Null:C1517; $option.data).worker
 	
-	var $stdErr : Text
-	
 	If (Not:C34($isAsync))
 		$worker.wait()
 	End if 
 	
 	If (Not:C34($isAsync))
-		$stdErr:=$worker.responseError
-	End if 
-	
-	If (Not:C34($isAsync))
-		return $stdErr
+		return $worker
 	End if 
 	
 Function list($option : Object) : Collection
