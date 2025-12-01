@@ -1,0 +1,10 @@
+ollama/userPreferences.*
+models/blobs/*
+models/elyza-8b-q4_k_m/Llama-3-ELYZA-JP-8B-q4_k_m.gguf
+ollama/Data/*
+ollama/Settings/buildApp.4DSettings
+ollama/Project/Sources/dependencies.json
+ollama/Project/DerivedData/*
+ollama/Libraries/lib4d-arm64.dylib
+ollama/Resources/bin/Windows/ollama.exe
+ollama/Resources/bin/macOS/ollama
