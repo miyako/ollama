@@ -32,7 +32,7 @@ cmake -S . -B build -A x64
 cmake --build build --config Release
 ```
 
-* install MSYS2
+* install [MSYS2](https://www.msys2.org) (ARM if Windows on ARM)
 * set path to gcc
 
 ```
