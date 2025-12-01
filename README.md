@@ -45,5 +45,5 @@ set PATH=C:\msys64\mingw64\bin;%PATH%
 set CGO_ENABLED=1
 set GOARCH=amd64
 set GOOS=windows
-go build -o ollama main.go
+go build -o ollama.exe main.go
 ```
