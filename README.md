@@ -28,7 +28,7 @@ GOARCH=amd64 GOOS=darwin go build -o ollama main.go
 ### Windows
 
 ```
-cmake -S . -B build
+cmake -S . -B build -A x64 -DUSE_AVX=ON -DUSE_AVX2=ON -DUSE_OPENMP=ON
 cmake --build build --config Release
 GOARCH=amd64 GOOS=windows go build -o ollama main.go
 ```
