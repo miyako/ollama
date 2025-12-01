@@ -21,6 +21,15 @@ GOARCH=arm64 GOOS=darwin go build -o ollama main.go
 ```
 cmake -S . -B build_amd
 cmake --build build_amd --config Release
+export CGO_ENABLED=1
+GOARCH=amd64 GOOS=darwin go build -o ollama main.go
+```
+
+### Windows
+
+```
+cmake -S . -B build -A x64
+cmake --build build --config Release
 ```
 
 * install MSYS2
@@ -33,15 +42,6 @@ set PATH=C:\msys64\mingw64\bin;%PATH%
 * build go
 
 ```
-export CGO_ENABLED=1
-GOARCH=amd64 GOOS=darwin go build -o ollama main.go
-```
-
-### Windows
-
-```
-cmake -S . -B build -A x64
-cmake --build build --config Release
 set CGO_ENABLED=1
 set GOARCH=amd64
 set GOOS=windows
