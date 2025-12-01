@@ -445,6 +445,90 @@
 		}
 	},
 	"ollama": {
+		"stop()": {
+			"Syntax": "**.stop**( *option* : Object; *formula* : 4D.Function ) : 4D.SystemWorker",
+			"Params": [
+				[
+					"option",
+					"Object",
+					"->"
+				],
+				[
+					"formula",
+					"4D.Function",
+					"->"
+				],
+				[
+					"",
+					"4D.SystemWorker",
+					"<-"
+				]
+			],
+			"Summary": ""
+		},
+		"rm()": {
+			"Syntax": "**.rm**( *option* : Object; *formula* : 4D.Function ) : 4D.SystemWorker",
+			"Params": [
+				[
+					"option",
+					"Object",
+					"->"
+				],
+				[
+					"formula",
+					"4D.Function",
+					"->"
+				],
+				[
+					"",
+					"4D.SystemWorker",
+					"<-"
+				]
+			],
+			"Summary": ""
+		},
+		"pull()": {
+			"Syntax": "**.pull**( *option* : Object; *formula* : 4D.Function ) : 4D.SystemWorker",
+			"Params": [
+				[
+					"option",
+					"Object",
+					"->"
+				],
+				[
+					"formula",
+					"4D.Function",
+					"->"
+				],
+				[
+					"",
+					"4D.SystemWorker",
+					"<-"
+				]
+			],
+			"Summary": ""
+		},
+		"create()": {
+			"Syntax": "**.create**( *option* : Object; *formula* : 4D.Function ) : 4D.SystemWorker",
+			"Params": [
+				[
+					"option",
+					"Object",
+					"->"
+				],
+				[
+					"formula",
+					"4D.Function",
+					"->"
+				],
+				[
+					"",
+					"4D.SystemWorker",
+					"<-"
+				]
+			],
+			"Summary": ""
+		},
 		"list()": {
 			"Syntax": "**.list**( *option* : Object ) : Collection",
 			"Params": [
@@ -461,6 +545,11 @@
 			],
 			"Summary": ""
 		},
+		"terminate()": {
+			"Syntax": "**.terminate**()",
+			"Params": [],
+			"Summary": ""
+		},
 		"serve()": {
 			"Syntax": "**.serve**( *option* : Object ) : 4D.SystemWorker",
 			"Params": [
@@ -473,27 +562,6 @@
 					"",
 					"4D.SystemWorker",
 					"<-"
-				]
-			],
-			"Summary": ""
-		},
-		"terminate()": {
-			"Syntax": "**.terminate**()",
-			"Params": [],
-			"Summary": ""
-		},
-		"create()": {
-			"Syntax": "**.create**( *option* : Object; *formula* : 4D.Function )",
-			"Params": [
-				[
-					"option",
-					"Object",
-					"->"
-				],
-				[
-					"formula",
-					"4D.Function",
-					"->"
 				]
 			],
 			"Summary": ""
