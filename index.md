@@ -41,34 +41,7 @@ keep_alive: "5m"; \
 models: $folder})
 ```
 
-Unless the server is already running (in which case the costructor does nothing), the following procedure runs in the background:
-
-1. The specified model is download via HTTP
-2. The `ollama` program is started
-
-Now you can test the server:
-
-```
-curl -X POST http://127.0.0.1:8080/v1/embeddings \
-     -H "Content-Type: application/json" \
-     -d '{"input":"The quick brown fox jumps over the lazy dog."}'
-```
-
-Or, use AI Kit:
-
-```4d
-var $AIClient : cs.AIKit.OpenAI
-$AIClient:=cs.AIKit.OpenAI.new()
-$AIClient.baseURL:="http://127.0.0.1:8080/v1"
-
-var $text : Text
-$text:="The quick brown fox jumps over the lazy dog."
-
-var $responseEmbeddings : cs.AIKit.OpenAIEmbeddingsResult
-$responseEmbeddings:=$AIClient.embeddings.create($text)
-```
-
-You can pull a public model from ollama.com:
+Instantiate `cs.ollama.ollama` and call `.pull()` to pull a public model from ollama.com:
 
 ```4d
 #DECLARE($params : Object)
@@ -105,6 +78,28 @@ Else
     $ollama.create({name: "elyza:jp8b"; file: $file; data: $file}; Formula(onResponse))
     
 End if 
+```
+
+Now you can test the server:
+
+```
+curl -X POST http://127.0.0.1:8080/v1/embeddings \
+     -H "Content-Type: application/json" \
+     -d '{"input":"The quick brown fox jumps over the lazy dog."}'
+```
+
+Or, use AI Kit:
+
+```4d
+var $AIClient : cs.AIKit.OpenAI
+$AIClient:=cs.AIKit.OpenAI.new()
+$AIClient.baseURL:="http://127.0.0.1:8080/v1"
+
+var $text : Text
+$text:="The quick brown fox jumps over the lazy dog."
+
+var $responseEmbeddings : cs.AIKit.OpenAIEmbeddingsResult
+$responseEmbeddings:=$AIClient.embeddings.create($text)
 ```
 
 Finally to terminate the server:
