@@ -6,7 +6,16 @@ Class constructor($controller : 4D:C1709.Class)
 		$controller:=cs:C1710._ollama_Controller
 	End if 
 	
-	Super:C1705("ollama"; $controller)
+	var $program : Text
+	
+	Case of 
+		: (Is macOS:C1572) && (Get system info:C1571.processor#"@Apple@")
+			$program:="ollama-x86_64"
+		Else 
+			$program:="ollama"
+	End case 
+	
+	Super:C1705($program; $controller)
 	
 Function get worker() : 4D:C1709.SystemWorker
 	
