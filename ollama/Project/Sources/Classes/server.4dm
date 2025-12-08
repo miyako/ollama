@@ -9,7 +9,7 @@ Function start($option : Object)
 	End if 
 	
 	var $signal : 4D:C1709.Signal
-	$signal:=New signal:C1641("ollama")
+	$signal:=New signal:C1641("llama.cpp")
 	
 	CALL WORKER:C1389($signal.description; This:C1470._start; $option; $signal)
 	
@@ -39,7 +39,7 @@ Function _terminate($signal : 4D:C1709.Signal)
 Function terminate()
 	
 	var $signal : 4D:C1709.Signal
-	$signal:=New signal:C1641("ollama")
+	$signal:=New signal:C1641("llama.cpp")
 	
 	CALL WORKER:C1389($signal.description; This:C1470._terminate; $signal)
 	
@@ -62,7 +62,7 @@ Function _isRunning($signal : 4D:C1709.Signal)
 Function isRunning() : Boolean
 	
 	var $signal : 4D:C1709.Signal
-	$signal:=New signal:C1641("ollama")
+	$signal:=New signal:C1641("llama.cpp")
 	
 	CALL WORKER:C1389($signal.description; This:C1470._isRunning; $signal)
 	
