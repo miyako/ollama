@@ -51,7 +51,7 @@ Function start($option : Object) : 4D:C1709.SystemWorker
 	
 	//SET TEXT TO PASTEBOARD($command)
 	
-	return This:C1470.controller.execute($command; $isStream ? $option.model : Null:C1517; $option.data).worker
+	return This:C1470.controller.execute($command; Null:C1517; $option.data).worker
 	
 Function get controller()->$controller : cs:C1710._Normal_Controller
 	
