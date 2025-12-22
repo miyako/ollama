@@ -11,7 +11,7 @@ layout: default
 
 #### Abstract
 
-[**Ollama**](https://github.com/ollama/ollama) is a lightweight, developer-friendly tool for running large language models (LLMs) locally. The backend is a modifed version of llama.cpp. 
+[**Ollama**](https://github.com/ollama/ollama) is a lightweight, developer-friendly tool for running large language models (LLMs) locally. The backend is **llama.cpp** with a [**custom pipeline**](https://ollama.com/blog/multimodal-models) for multimodal models. 
 
 Ollama has `2` compoenents:
 
