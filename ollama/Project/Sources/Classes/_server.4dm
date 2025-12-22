@@ -108,7 +108,7 @@ Function _simple($function : Text; $option : Variant; $formula : 4D:C1709.Functi
 		
 		For each ($arg; OB Entries:C1720($option))
 			Case of 
-				: (["port"; "model"; "debug"].includes($arg.key))
+				: (["port"; "model"].includes($arg.key))
 					continue
 				: ($arg.key="host")
 					$OLLAMA_HOST:=String:C10($arg.value)+":"+String:C10($option.port)
