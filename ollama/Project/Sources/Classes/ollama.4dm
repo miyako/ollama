@@ -1,209 +1,62 @@
-Class extends _CLI
+property options : Object
 
-Class constructor($controller : 4D:C1709.Class)
+Class constructor($port : Integer; $models : Collection; $options : Object; $event : cs:C1710.event.event)
 	
-	If (Not:C34(OB Instance of:C1731($controller; cs:C1710._ollama_Controller)))
-		$controller:=cs:C1710._ollama_Controller
+	This:C1470.options:=$options#Null:C1517 ? $options : {}
+	
+	If (Value type:C1509(This:C1470.options.host)#Is text:K8:3) || (This:C1470.options.host="")
+		This:C1470.options.host:="127.0.0.1"
 	End if 
 	
-	var $program : Text
+	var $ollama : cs:C1710.workers.worker
+	$ollama:=cs:C1710.workers.worker.new(cs:C1710._server)
 	
-	Case of 
-		: (Is macOS:C1572) && (Get system info:C1571.processor#"@Apple@")
-			$program:="ollama-x86_64"
-		Else 
-			$program:="ollama"
-	End case 
+	If (Not:C34($ollama.isRunning($port)))
+		
+		If ($models=Null:C1517) || ($models.length=0)
+			$models:=["nomic-embed-text:latest"; "llama3.2:1b"]
+		End if 
+		
+		If ($port=0) || ($port<0) || ($port>65535)
+			$port:=8080
+		End if 
+		
+		This:C1470.options.models:=$models
+		This:C1470.options.port:=$port
+		
+		This:C1470._main($port; $models; $options; $event)
+		
+	End if 
 	
-	Super:C1705($program; $controller)
+Function _onTCP($status : Object; $options : Object)
 	
-Function get worker() : 4D:C1709.SystemWorker
+	If ($status.success)
+		
+		var $className : Text
+		$className:=Split string:C1554(Current method name:C684; "."; sk trim spaces:K86:2).first()
+		
+		CALL WORKER:C1389($className; Formula:C1597(start); $options)
+		
+	Else 
+		
+		var $statuses : Text
+		$statuses:="TCP port "+String:C10($status.port)+" is aready used by process "+$status.PID.join(",")
+		var $error : cs:C1710.event.error
+		$error:=cs:C1710.event.error.new(1; $statuses)
+		
+		If ($options.event#Null:C1517) && (OB Instance of:C1731($options.event; cs:C1710.event.event))
+			$options.event.onError.call(This:C1470; $options; $error)
+		End if 
+		
+	End if 
 	
-	return This:C1470.controller.worker
+Function _main($port : Integer; $models : Collection; $options : Object; $event : cs:C1710.event.event)
+	
+	main({port: $port; models: $models; options: $options; event: $event}; This:C1470._onTCP)
 	
 Function terminate()
 	
-	This:C1470.controller.terminate()
+	var $ollama : cs:C1710.workers.worker
+	$ollama:=cs:C1710.workers.worker.new(cs:C1710._server)
+	$ollama.terminate()
 	
-Function _simple($function : Text; $option : Object; $formula : 4D:C1709.Function) : 4D:C1709.SystemWorker
-	
-	If (Not:C34(cs:C1710.server.new().isRunning()))
-		return 
-	End if 
-	
-	var $isAsync : Boolean
-	
-	If (OB Instance of:C1731($formula; 4D:C1709.Function))
-		$isAsync:=True:C214
-		This:C1470.controller.onResponse:=$formula
-	End if 
-	
-	var $command : Text
-	$command:=This:C1470.escape(This:C1470.executablePath)
-	$command+=" "
-	$command+=$function
-	
-	If (Value type:C1509($option.name)=Is text:K8:3) && ($option.name#"")
-		$command+=" "
-		$command+=This:C1470.escape($option.name)
-	End if 
-	
-	This:C1470.controller.variables.HOME:=Folder:C1567(fk home folder:K87:24).path
-	This:C1470.controller.variables.GIN_MODE:="release"
-	This:C1470.controller.variables.OLLAMA_HOST:=Storage:C1525.variables.OLLAMA_HOST
-	
-	var $worker : 4D:C1709.SystemWorker
-	$worker:=This:C1470.controller.execute($command; Null:C1517; $option.data).worker
-	
-	If (Not:C34($isAsync))
-		$worker.wait()
-	End if 
-	
-	If (Not:C34($isAsync))
-		return $worker
-	End if 
-	
-Function pull($option : Object; $formula : 4D:C1709.Function) : 4D:C1709.SystemWorker
-	
-	return This:C1470._simple("pull"; $option; $formula)
-	
-Function stop($option : Object; $formula : 4D:C1709.Function) : 4D:C1709.SystemWorker
-	
-	return This:C1470._simple("stop"; $option; $formula)
-	
-Function rm($option : Object; $formula : 4D:C1709.Function) : 4D:C1709.SystemWorker
-	
-	return This:C1470._simple("rm"; $option; $formula)
-	
-Function create($option : Object; $formula : 4D:C1709.Function) : 4D:C1709.SystemWorker
-	
-	If (Not:C34(cs:C1710.server.new().isRunning()))
-		return 
-	End if 
-	
-	var $isAsync : Boolean
-	
-	If (OB Instance of:C1731($formula; 4D:C1709.Function))
-		$isAsync:=True:C214
-		This:C1470.controller.onResponse:=$formula
-	End if 
-	
-	var $command : Text
-	$command:=This:C1470.escape(This:C1470.executablePath)
-	$command+=" create"
-	
-	If (Value type:C1509($option.name)=Is text:K8:3) && ($option.name#"")
-		$command+=" "
-		$command+=This:C1470.escape($option.name)
-	End if 
-	
-	Case of 
-		: (Value type:C1509($option.file)=Is object:K8:27) && (OB Instance of:C1731($option.file; 4D:C1709.File)) && ($option.file.exists)
-			$command+=" -f "
-			$command+=This:C1470.expand($option.file).path
-	End case 
-	
-	This:C1470.controller.variables.HOME:=Folder:C1567(fk home folder:K87:24).path
-	This:C1470.controller.variables.GIN_MODE:="release"
-	This:C1470.controller.variables.OLLAMA_HOST:=Storage:C1525.variables.OLLAMA_HOST
-	
-	var $worker : 4D:C1709.SystemWorker
-	$worker:=This:C1470.controller.execute($command; Null:C1517; $option.data).worker
-	
-	If (Not:C34($isAsync))
-		$worker.wait()
-	End if 
-	
-	If (Not:C34($isAsync))
-		return $worker
-	End if 
-	
-Function list($option : Object) : Collection
-	
-	If (Not:C34(cs:C1710.server.new().isRunning()))
-		return 
-	End if 
-	
-	var $command : Text
-	$command:=This:C1470.escape(This:C1470.executablePath)
-	$command+=" list"
-	
-	This:C1470.controller.variables.HOME:=Folder:C1567(fk home folder:K87:24).path
-	This:C1470.controller.variables.GIN_MODE:="release"
-	This:C1470.controller.variables.OLLAMA_HOST:=Storage:C1525.variables.OLLAMA_HOST
-	
-	$status:=This:C1470.controller.execute($command).worker
-	
-	$status.wait()
-	
-	var $stdOut : Text
-	$stdOut:=$status.response
-	
-	$models:=[]
-	
-	ARRAY LONGINT:C221($pos; 0)
-	ARRAY LONGINT:C221($len; 0)
-	
-	var $model : Text
-	$list:=Split string:C1554($stdOut; This:C1470.EOL)
-	$list.shift()
-	For each ($model; $list)
-		If (Match regex:C1019("^(\\S+)\\s+(\\S+)\\s+(\\S+\\s+\\S+)\\s+(.+?)\\s+$"; $model; 1; $pos; $len))
-			$name:=Substring:C12($model; $pos{1}; $len{1})
-			$id:=Substring:C12($model; $pos{2}; $len{2})
-			$size:=Substring:C12($model; $pos{3}; $len{3})
-			$modified:=Substring:C12($model; $pos{4}; $len{4})
-			$models.push({name: $name; id: $id; size: $size; modified: $modified})
-		End if 
-	End for each 
-	
-	return $models
-	
-Function serve($option : Object) : 4D:C1709.SystemWorker
-	
-	var $command : Text
-	$command:=This:C1470.escape(This:C1470.executablePath)
-	$command+=" serve"
-	
-	Case of 
-		: (Value type:C1509($option.models)=Is object:K8:27) && (OB Instance of:C1731($option.models; 4D:C1709.Folder)) && ($option.models.exists)
-			This:C1470.controller.variables.OLLAMA_MODELS:=This:C1470.expand($option.models).path
-	End case 
-	
-	$OLLAMA_HOST:="127.0.0.1:8080"
-	
-	var $arg : Object
-	var $valueType : Integer
-	var $key : Text
-	
-	For each ($arg; OB Entries:C1720($option))
-		Case of 
-			: (["models"; "debug"].includes($arg.key))
-				continue
-			: ($arg.key="host")
-				$OLLAMA_HOST:=String:C10($arg.value)
-				continue
-		End case 
-		$valueType:=Value type:C1509($arg.value)
-		$env:="OLLAMA_"+Uppercase:C13($arg.key; *)
-		Case of 
-			: ($valueType=Is real:K8:4)
-				This:C1470.controller.variables[$env]:=String:C10($arg.value)
-			: ($valueType=Is text:K8:3)
-				This:C1470.controller.variables[$env]:=$arg.value
-			: ($valueType=Is boolean:K8:9) && ($arg.value)
-				This:C1470.controller.variables[$env]:="1"
-			Else 
-				//
-		End case 
-	End for each 
-	
-	Use (Storage:C1525)
-		Storage:C1525.variables:=New shared object:C1526("OLLAMA_HOST"; $OLLAMA_HOST)
-	End use 
-	
-	This:C1470.controller.variables.OLLAMA_HOST:=$OLLAMA_HOST
-	This:C1470.controller.variables.HOME:=Folder:C1567(fk home folder:K87:24).path
-	This:C1470.controller.variables.GIN_MODE:="release"
-	
-	return This:C1470.controller.execute($command).worker

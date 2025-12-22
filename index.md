@@ -22,60 +22,43 @@ By design, llama.cpp can only run `1` model at a time. The REST server automatic
 
 #### Usage
 
-Instantiate `cs.ollama.server` and call `.start()` in your *On Startup* database method:
+Instantiate `cs.ollama.ollama` in your *On Startup* database method:
 
 ```4d
-var $folder : 4D.Folder
-$folder:=Folder(Folder("/PACKAGE/").platformPath; fk platform path).parent.folder("models")
+var $ollama : cs.ollama.ollama
 
-var $ollama : cs.ollama.server
-$ollama:=cs.ollama.server.new()
-
-var $isRunning : Boolean
-$isRunning:=$ollama.isRunning()
-
-$ollama.start({\
-host: "127.0.0.1:8080"; \
-content_length: 4096; \
-keep_alive: "5m"; \
-models: $folder})
-```
-
-Instantiate `cs.ollama.ollama` and call `.pull()` to pull a public model from ollama.com:
-
-```4d
-#DECLARE($params : Object)
-
-If (Count parameters=0)
-    
-    CALL WORKER(1; Current method name; {})
-    
+If (False)
+    $ollama:=cs.ollama.ollama.new()  //default
 Else 
+    var $port : Integer
     
-    var $ollama : cs.ollama.ollama
-    $ollama:=cs.ollama.ollama.new()
-    $ollama.pull({name: "nomic-embed-text"; data: {message: "done!"}}; Formula(ALERT($2.context.message)))
+    var $event : cs.event.event
+    $event:=cs.event.event.new()
+    /*
+        Function onError($params : Object; $error : cs.event.error)
+        Function onSuccess($params : Object; $models : cs.event.models)
+        Function onData($worker : 4D.SystemWorker; $params : Object)
+        Function onTerminate($worker : 4D.SystemWorker; $params : Object)
+    */
     
-End if 
-```
-
-If you have a `Modelfile`, you can add it to the list of models:
-
-```4d
-#DECLARE($params : Object)
-
-If (Count parameters=0)
+    $event.onError:=Formula(ALERT($2.message))
+    $event.onSuccess:=Formula(ALERT($2.models.extract("name").join(",")+" loaded!"))
+    $event.onData:=Formula(MESSAGE([$2.fileName; $2.percentage; "%"].join(" ")))
+    $event.onTerminate:=Formula(LOG EVENT(Into 4D debug message; (["process"; $1.pid; "terminated!"].join(" "))))
     
-    CALL WORKER(1; Current method name; {})
+    $port:=8080
+    $models:=["nomic-embed-text:latest"; "llama3.2:1b"]
     
-Else 
-    
-    var $file : 4D.File
-    $file:=Folder(Folder("/PACKAGE/").platformPath; fk platform path).parent.file("models/elyza-8b-q4_k_m/Modelfile")
-    
-    var $ollama : cs.ollama.ollama
-    $ollama:=cs.ollama.ollama.new()
-    $ollama.create({name: "elyza:jp8b"; file: $file; data: $file}; Formula(onResponse))
+    $ollama:=cs.ollama.ollama.new($port; $models; {\
+    host: "127.0.0.1"; \
+    context_length: 4096; \
+    keep_alive: "5m"; \
+    max_loaded_models: 1; \
+    max_queue: 100; \
+    num_parallel: 10; \
+    kv_cache_type: "f16"; \
+    flash_attention: 1; \
+    models: Folder(fk home folder).folder(".ollama/models")}; $event)
     
 End if 
 ```
@@ -85,7 +68,22 @@ Now you can test the server:
 ```
 curl -X POST http://127.0.0.1:8080/v1/embeddings \
      -H "Content-Type: application/json" \
-     -d '{"input":"The quick brown fox jumps over the lazy dog."}'
+     -d '{"model":"nomic-embed-text:latest", 
+     "input":"The quick brown fox jumps over the lazy dog."}'
+```
+
+```
+curl -X POST http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "llama3.2:1b",
+    "messages": [
+      {"role": "user", "content": "Hello!"}
+    ],
+    "temperature": 0.7,
+    "max_tokens": 100,
+    "stream": true
+  }'
 ```
 
 Or, use AI Kit:
