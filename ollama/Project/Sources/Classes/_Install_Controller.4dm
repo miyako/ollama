@@ -28,12 +28,10 @@ Function onDataError($worker : 4D:C1709.SystemWorker; $params : Object)
 			$fileName:=Substring:C12($stdErr; $pos{1}; $len{1})
 			$percentage:=Num:C11(Substring:C12($stdErr; $pos{2}; $len{2}))
 			$i:=$pos{0}+$len{0}
-			If ($instance.onData#Null:C1517) && (OB Instance of:C1731($instance.onData; 4D:C1709.Function))
-				$context:={}
-				$context.fileName:=$fileName
-				$context.percentage:=$percentage
-				$instance.onData.call(This:C1470; $worker; $context)
-			End if 
+			$context:={}
+			$context.fileName:=$fileName
+			$context.percentage:=$percentage
+			$instance.onData.call(This:C1470; $worker; $context)
 		End while 
 		This:C1470.stdErr:=Substring:C12($stdErr; $i)
 	End if 
