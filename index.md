@@ -25,9 +25,10 @@ Current upstream source also includes an MLX engine on supported platforms.
 
 The reviewed source is **[Ollama v0.40.13](https://github.com/ollama/ollama/releases/tag/v0.40.13)**,
 commit [`04088e7c9d41cba5d33bafbf788d87a465c79d5b`](https://github.com/ollama/ollama/commit/04088e7c9d41cba5d33bafbf788d87a465c79d5b),
-verified as latest stable on 2026-11-02. Native releases are independent of the
-4D component version `20.1.5`; the old component archives do not automatically
-receive new native payloads.
+verified as latest stable on 2026-11-02. **Build Ollama from source** now connects
+the native matrix directly to the ordinary 4D **Publish** workflow. New component
+ZIP/DMG releases contain every native architecture and runtime dependency; old
+component archives such as `20.1.5` are not modified retroactively.
 
 The **Build Ollama from source** GitHub Actions workflow builds the real CMake
 superbuild, including the Go CLI/server, pinned llama.cpp helpers, libraries,
@@ -39,7 +40,9 @@ licenses and (Apple Silicon) MLX/Metal assets. It does not repackage official bi
 | macOS Intel | CPU | macOS 14+, no Metal or MLX engine |
 | Windows x64 | CPU and required runtime DLLs | Windows 10/11 UCRT, no MLX engine |
 
-Download the matching **unsigned native ZIP** and `.zip.sha256` from a
+For 4D, install the ordinary component `ollama.zip`/`.dmg`; it already includes
+these resources. For standalone use or manually updating an older component,
+download the matching **unsigned native ZIP** and `.zip.sha256` from a
 [`native-v…` release](https://github.com/miyako/ollama/releases).
 Verify SHA-256 (`shasum -a 256 -c FILE.zip.sha256`, or compare Windows
 `Get-FileHash FILE.zip -Algorithm SHA256` with the sidecar). Merge the extracted
@@ -59,11 +62,12 @@ Install the updated 4D component source too: its launcher prefers the matching M
 architecture executable, retaining the legacy flat-directory fallback when absent.
 Restore executable permissions on macOS if your ZIP tool drops them.
 Keep `BUILD-INFO.json`, `LICENSE`, runtime license notices and Windows compiler notices.
-No Developer ID signing/notarization, desktop app, models, Linux/Windows ARM builds,
+Native ZIPs remain unsigned; the normal component packaging signs its macOS code
+and submits the component DMG for notarization. No desktop app, models, Linux/Windows ARM builds,
 CUDA/ROCm/Vulkan payloads or model-backed inference verification are included.
 Follow your organization's approval/signing process if OS security policy blocks
-unsigned downloads. Intel/Windows native CI and 4D integration must be verified
-before deployment; a host API smoke alone does not establish inference compatibility.
+unsigned downloads. Model-backed inference and minimum-OS compatibility remain
+separate deployment checks; a host API smoke alone does not establish inference compatibility.
 
 For standalone use, run `OLLAMA_HOST=127.0.0.1:8080 macOS/arm64/ollama serve`,
 or in PowerShell `$env:OLLAMA_HOST='127.0.0.1:8080'; .\Windows\ollama.exe serve`.
@@ -71,15 +75,28 @@ Check `curl --fail http://127.0.0.1:8080/api/version` without downloading a mode
 
 PR/push builds use the reviewed immutable pin. Weekly/manual runs resolve the latest
 published stable release once to a full SHA; manual `upstream_tag` and `expected_sha`
-allow a specific stable revision. Weekly builds only produce reviewable artifacts.
-To publish, dispatch from this repository's `main` with `publish=true`: all three
-native builds and isolated API checks must succeed, then a new `native-vVERSION-SHA12-rN`
-release is created without overwriting existing tags/assets or replacing the latest
-4D release. The publishing job alone receives write permission.
+allow a specific stable revision. **Dispatch Build Ollama from source on `main`**:
+it automatically builds, verifies and publishes new native inputs, or reuses the
+already-published immutable source/recipe. Relevant main pushes and weekly runs
+use the same integrated flow; PRs only validate and cannot publish.
+
+The workflow then verifies all three complete consumer layouts and automatically
+dispatches **Publish** if the component does not already contain the same native
+payload. Component packaging stages verified assets at `Resources/bin`, checks the
+actual built `.4dbase` and signed ZIP, then publishes ZIP/DMG, `native-source.json`
+and `SHA256SUMS` together. The native `native-vVERSION-SHA12-rN` release stays **not latest**;
+the intended integrated 4D component release is latest. An identical already-released
+native/component pair skips both releases and the component version bump.
+The parent dispatches without waiting, so the shared release lock cannot deadlock.
 Complete unpublished drafts can be explicitly resumed from the native publishing
 workflow using the original build run and draft IDs. Recovery verifies all nine
 uploaded asset digests and the original source/recipe without replacing assets;
 incomplete or unexpected drafts remain unpublished. See the README for recovery inputs.
+
+Source checkouts retain their existing legacy executable/fallback behavior. Developers
+can stage complete locked natives with `scripts/native/install.py prepare` followed by
+`install`; see the README commands. Large runtime assets are staged at packaging time,
+not committed to Git (`mlx.metallib` exceeds GitHub's 100 MB file limit).
 
 For local builds, install Python 3.11+, CMake 3.24+, Ninja, Git/`gh` and the Go version
 in upstream `go.mod` (1.26.10 at this pin), plus Xcode/Metal on Mac ARM or MSYS2 UCRT64

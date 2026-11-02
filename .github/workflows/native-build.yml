@@ -2,10 +2,10 @@ name: Build Ollama from source
 
 on:
   pull_request:
-    paths: ['scripts/native/**', '.github/workflows/native-*.yml']
+    paths: ['scripts/native/**', '.github/workflows/native-*.yml', '.github/workflows/publish.yml']
   push:
     branches: [main]
-    paths: ['scripts/native/**', '.github/workflows/native-*.yml']
+    paths: ['scripts/native/**', '.github/workflows/native-*.yml', '.github/workflows/publish.yml']
   schedule:
     - cron: '23 6 * * 2'
   workflow_dispatch:
@@ -18,17 +18,13 @@ on:
         description: 'Optional full upstream SHA to enforce when resolving a manual tag'
         type: string
         default: ''
-      publish:
-        description: 'Publish a NEW native release after all smoke checks (main only)'
-        type: boolean
-        default: false
 
 permissions:
   actions: read
   contents: read
 
 concurrency:
-  group: native-${{ github.ref }}
+  group: ollama-release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -50,13 +46,6 @@ jobs:
           python-version: '3.12'
       - name: Test build tooling
         run: python -m unittest discover -s scripts/native -p 'test_*.py' -v
-      - name: Check publication scope
-        if: inputs.publish
-        shell: bash
-        run: |
-          test "$GITHUB_REPOSITORY" = miyako/ollama
-          test "$GITHUB_REF" = refs/heads/main
-          test "$GITHUB_EVENT_NAME" = workflow_dispatch
       - name: Resolve release to immutable source
         id: source
         env:
@@ -75,7 +64,7 @@ jobs:
           python scripts/native/source.py --selection "$selection" \
             --tag "$UPSTREAM_TAG" --expected-sha "$EXPECTED_SHA"
           cat .build/source.json >> "$GITHUB_STEP_SUMMARY"
-      - name: Skip already published scheduled revision
+      - name: Reuse an already published native source/recipe
         id: detect
         env:
           GH_TOKEN: ${{ github.token }}
@@ -210,10 +199,41 @@ jobs:
       - name: Validate real matrix outputs without release permissions
         run: python scripts/native/publish.py --verify-only .build/downloads
 
+  integration:
+    name: Verify actual 4D native resource layout
+    needs: [source, build, verify]
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: .build/downloads
+      - name: Stage complete runtimes at the wrapper's component paths
+        run: |
+          python scripts/native/install.py prepare --artifacts .build/downloads \
+            --source .build/downloads/native-source/source.json --destination .build/component-native
+          python scripts/native/install.py install .build/component-native .build/ollama.4dbase/Resources/bin
+          python scripts/native/install.py verify .build/ollama.4dbase/Resources/bin
+          python scripts/native/smoke.py .build/ollama.4dbase/Resources/bin/macOS/arm64/ollama \
+            --version "${{ needs.source.outputs.version }}" --log .build/component-layout-smoke.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: component-native-preview
+          path: .build/ollama.4dbase/Resources/bin/
+          if-no-files-found: error
+          retention-days: 7
+
   publish:
-    needs: [source, verify]
+    needs: [source, verify, integration]
     if: >-
-      github.event_name == 'workflow_dispatch' && inputs.publish &&
+      contains(fromJSON('["push", "schedule", "workflow_dispatch"]'), github.event_name) &&
       github.repository == 'miyako/ollama' && github.ref == 'refs/heads/main'
     permissions:
       actions: read
@@ -221,3 +241,40 @@ jobs:
     uses: ./.github/workflows/native-publish.yml
     with:
       release_tag: ${{ needs.source.outputs.release_tag }}
+
+  component:
+    name: Adopt verified natives and dispatch component Publish if needed
+    needs: [source, publish]
+    if: >-
+      always() && needs.source.result == 'success' &&
+      github.repository == 'miyako/ollama' && github.ref == 'refs/heads/main' &&
+      contains(fromJSON('["push", "schedule", "workflow_dispatch"]'), github.event_name) &&
+      (needs.source.outputs.build == 'false' || needs.publish.result == 'success')
+    runs-on: macos-15
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-source
+          path: .build
+      - name: Verify immutable native release and complete consumer payload
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python scripts/native/install.py prepare --source .build/source.json \
+            --destination .build/component-native
+          python scripts/native/smoke.py .build/component-native/macOS/arm64/ollama \
+            --version "${{ needs.source.outputs.version }}" --log .build/component-adoption-smoke.log
+      - name: Publish the component only when its native payload changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/native/component.py dispatch .build/component-native/native-source.json

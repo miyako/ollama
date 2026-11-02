@@ -35,8 +35,9 @@ def run(*args, cwd=None, env=None):
     subprocess.run([str(arg) for arg in args], cwd=cwd, env=env, check=True)
 
 
-def require_payload(payload, mlx):
-    suffix = ".exe" if os.name == "nt" else ""
+def require_payload(payload, mlx, suffix=None):
+    if suffix is None:
+        suffix = ".exe" if os.name == "nt" else ""
     for name in ["llama-server" + suffix, "llama-quantize" + suffix,
                  "GO_LICENSE", "LLAMA_CPP_LICENSE", "LLAMA_CPP_VENDORS_LICENSE"]:
         if not (payload / "lib/ollama" / name).is_file():

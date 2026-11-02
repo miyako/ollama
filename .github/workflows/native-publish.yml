@@ -32,7 +32,7 @@ concurrency:
 jobs:
   publish:
     if: >-
-      github.event_name == 'workflow_dispatch' &&
+      contains(fromJSON('["push", "schedule", "workflow_dispatch"]'), github.event_name) &&
       github.repository == 'miyako/ollama' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10

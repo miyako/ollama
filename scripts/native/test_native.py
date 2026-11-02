@@ -10,7 +10,9 @@ from unittest.mock import patch
 import zipfile
 
 import build
+import component
 import detect
+import install
 import publish
 import smoke
 import source
@@ -55,6 +57,33 @@ class SourceTests(unittest.TestCase):
 
 
 class DetectTests(unittest.TestCase):
+    def test_only_trusted_main_events_reuse_an_existing_published_release(self):
+        for event, ref, expected in [("push", "refs/heads/main", False),
+                                     ("schedule", "refs/heads/main", False),
+                                     ("workflow_dispatch", "refs/heads/main", False),
+                                     ("pull_request", "refs/pull/3/merge", True)]:
+            with tempfile.TemporaryDirectory() as temp:
+                output = Path(temp) / "output"
+                env = {"EVENT": event, "GITHUB_REF": ref, "GITHUB_REPOSITORY": "miyako/ollama",
+                       "GITHUB_OUTPUT": str(output)}
+                with patch.dict(os.environ, env), patch.object(detect, "Path") as path, \
+                        patch.object(detect, "existing_release",
+                                     return_value={"draft": False, "prerelease": False}) as lookup:
+                    path.return_value.read_text.return_value = json.dumps({"release_tag": "native-existing"})
+                    detect.main()
+                    self.assertEqual(output.read_text(), f"build={str(expected).lower()}\n")
+                    self.assertEqual(lookup.call_count, 0 if expected else 1)
+
+    def test_existing_draft_blocks_automatic_rebuild_and_overwrite(self):
+        env = {"EVENT": "push", "GITHUB_REF": "refs/heads/main",
+               "GITHUB_REPOSITORY": "miyako/ollama"}
+        with patch.dict(os.environ, env), patch.object(detect, "Path") as path, \
+                patch.object(detect, "existing_release",
+                             return_value={"draft": True, "prerelease": False}):
+            path.return_value.read_text.return_value = json.dumps({"release_tag": "native-existing"})
+            with self.assertRaisesRegex(RuntimeError, "inspect/recover"):
+                detect.main()
+
     def test_only_404_is_absent(self):
         with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess(
                 [], 1, "", "gh: Not Found (HTTP 404)")), \
@@ -333,14 +362,14 @@ class PackageTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Source mismatch"):
                 publish.verify_assets(downloads, tag)
 
-    def test_publication_is_manual_main_only_and_never_overwrites(self):
+    def test_publication_is_trusted_main_only_and_never_overwrites(self):
         env = {"GITHUB_REPOSITORY": "miyako/ollama", "GITHUB_REF": "refs/heads/main",
                "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_SHA": "r" * 40,
                "RELEASE_TAG": "native-v1.2.3-aaaaaaaaaaaa-r1"}
         info = {"recipe_sha": env["GITHUB_SHA"], "recipe_dirty": False}
-        with patch.dict(os.environ, {**env, "GITHUB_EVENT_NAME": "schedule"}), \
+        with patch.dict(os.environ, {**env, "GITHUB_EVENT_NAME": "pull_request"}), \
                 patch.object(publish, "verify_assets") as verify:
-            with self.assertRaisesRegex(RuntimeError, "explicit dispatches"):
+            with self.assertRaisesRegex(RuntimeError, "trusted main"):
                 publish.main()
             verify.assert_not_called()
         with patch.dict(os.environ, env), \
@@ -368,7 +397,7 @@ class PackageTests(unittest.TestCase):
                          "target_commitish": info["recipe_sha"], "assets": []}]) as api, \
                     patch.object(publish.subprocess, "run",
                                  return_value=subprocess.CompletedProcess([], 1, "", "HTTP 404")) as run:
-                with self.assertRaisesRegex(RuntimeError, "draft left unpublished"):
+                with self.assertRaisesRegex(RuntimeError, "asset set mismatch"):
                     publish.main()
                 commands = [call.args[0] for call in run.call_args_list]
                 self.assertEqual(len(commands), 2)
@@ -392,7 +421,7 @@ class PackageTests(unittest.TestCase):
             publish.verify_draft(release, tag, info, assets)
             for change in [{"draft": False}, {"prerelease": True}, {"tag_name": "wrong"},
                            {"target_commitish": "c" * 40}, {"assets": release["assets"][:-1]}]:
-                with self.assertRaisesRegex(RuntimeError, "draft left unpublished"):
+                with self.assertRaisesRegex(RuntimeError, "draft left unpublished|asset set mismatch"):
                     publish.verify_draft({**release, **change}, tag, info, assets)
             for change in [{"digest": "sha256:" + "0" * 64}, {"size": 0}, {"state": "new"}]:
                 changed = {**release, "assets": [{**release["assets"][0], **change},
@@ -461,19 +490,302 @@ class PackageTests(unittest.TestCase):
             env = {"GITHUB_REPOSITORY": "miyako/ollama", "GITHUB_REF": "refs/heads/main",
                    "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_SHA": info["recipe_sha"],
                    "RELEASE_TAG": tag, "SOURCE_RUN_ID": "", "RESUME_DRAFT_ID": ""}
+            for event in ("push", "schedule", "workflow_dispatch"):
+                with patch.dict(os.environ, {**env, "GITHUB_EVENT_NAME": event}), \
+                        patch.object(publish, "verify_assets", return_value=(info, assets)), \
+                        patch.object(publish, "existing_release", return_value=None) as lookup, \
+                        patch.object(publish, "api", side_effect=[
+                            {"id": 123}, draft,
+                            {**draft, "draft": False, "html_url": "https://github.com/release"}]) as api, \
+                        patch.object(publish.subprocess, "run",
+                                     return_value=subprocess.CompletedProcess([], 1, "", "HTTP 404")):
+                    publish.main()
+                    lookup.assert_called_once()
+                    self.assertEqual(api.call_args_list[1].args,
+                                     ("miyako/ollama", "releases/123"))
+                    self.assertIn("PATCH", api.call_args.args)
+
+
+class ComponentIntegrationTests(unittest.TestCase):
+    def fixtures(self, downloads):
+        source_info = {**install.locked_source(), "recipe_sha": "b" * 40, "recipe_dirty": False}
+        (downloads / "native-source").mkdir(parents=True)
+        (downloads / "native-source/source.json").write_text(json.dumps(source_info))
+        for target, (layout, binary) in install.LAYOUTS.items():
+            folder = downloads / f"native-{target}"
+            folder.mkdir()
+            info = {**source_info, "target": target}
+            (folder / f"{target}-BUILD-INFO.json").write_text(json.dumps(info))
+            files = {binary: b"binary", "LICENSE": b"license",
+                     "BUILD-INFO.json": json.dumps(info).encode()}
+            if target.startswith("macos"):
+                files[binary] = bytes.fromhex("cffaedfe") + b"test Mach-O"
+            suffix = ".exe" if target.startswith("windows") else ""
+            for name in ("llama-server" + suffix, "llama-quantize" + suffix,
+                         "GO_LICENSE", "LLAMA_CPP_LICENSE", "LLAMA_CPP_VENDORS_LICENSE"):
+                files["lib/ollama/" + name] = b"runtime"
+            if target == "macos-arm64":
+                for name in ("MLX_LICENSE", "MLX_C_LICENSE", "XGRAMMAR_LICENSE", "XGRAMMAR_NOTICE"):
+                    files["lib/ollama/" + name] = b"license"
+                for name in ("libmlx.dylib", "libmlxc.dylib", "libollama_xgrammar.dylib", "mlx.metallib"):
+                    files["lib/ollama/mlx_metal_v3/" + name] = b"MLX runtime"
+            if target.startswith("windows"):
+                files["compiler-licenses/gcc/COPYING.RUNTIME"] = b"runtime exception"
+                files["lib/ollama/ggml.dll"] = b"DLL"
+            archive = folder / f"ollama-{source_info['tag']}-{source_info['sha'][:12]}-{target}-unsigned.zip"
+            with zipfile.ZipFile(archive, "w") as package:
+                for name, content in files.items():
+                    entry = zipfile.ZipInfo(layout + "/" + name)
+                    entry.external_attr = (0o100755 if name == binary else 0o100644) << 16
+                    package.writestr(entry, content)
+            archive.with_suffix(".zip.sha256").write_text(
+                f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n")
+        return source_info
+
+    def test_complete_native_payload_replaces_legacy_component_executable(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source_info = self.fixtures(root / "artifacts")
+            prepared = root / "prepared"
+            manifest = install.prepare(root / "artifacts", prepared, source_info)
+            destination = root / "ollama.4dbase/Resources/bin"
+            (destination / "macOS").mkdir(parents=True)
+            (destination / "macOS/ollama-x86_64").write_text("legacy")
+            install.install(prepared, destination)
+            self.assertFalse((destination / "macOS/ollama-x86_64").exists())
+            self.assertEqual(install.verify_installed(destination), manifest)
+            self.assertTrue((destination / "macOS/arm64/ollama").stat().st_mode & 0o111)
+            self.assertTrue((destination / "macOS/x86_64/ollama-x86_64").is_file())
+            self.assertTrue((destination / "Windows/lib/ollama/ggml.dll").is_file())
+            self.assertTrue((destination / "macOS/arm64/lib/ollama/mlx_metal_v3/mlx.metallib").is_file())
+
+    def test_staging_rejects_source_mismatch_and_zip_path_traversal(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            info = self.fixtures(root / "artifacts")
+            with self.assertRaisesRegex(ValueError, "selected source"):
+                install.prepare(root / "artifacts", root / "wrong", {**info, "sha": "c" * 40})
+            archive = next((root / "artifacts/native-macos-arm64").glob("*.zip"))
+            with zipfile.ZipFile(archive, "a") as package:
+                package.writestr("macOS/arm64/../../../escape", "bad")
+            archive.with_suffix(".zip.sha256").write_text(f"{install.digest(archive)}  {archive.name}\n")
+            with self.assertRaisesRegex(ValueError, "Unsafe/unexpected"):
+                install.prepare(root / "artifacts", root / "unsafe", info)
+            self.assertFalse((root / "escape").exists())
+
+    def test_component_resources_reject_missing_extra_and_corrupt_files(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            info = self.fixtures(root / "artifacts")
+            prepared = root / "prepared"
+            install.prepare(root / "artifacts", prepared, info)
+            extra = prepared / "macOS/ollama-x86_64"
+            extra.write_text("legacy")
+            with self.assertRaisesRegex(ValueError, "missing/extra"):
+                install.verify_installed(prepared)
+            extra.unlink()
+            library = prepared / "Windows/lib/ollama/ggml.dll"
+            library.write_text("corrupt")
+            with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+                install.verify_installed(prepared, signed=True)
+            library.unlink()
+            with self.assertRaisesRegex(ValueError, "missing/extra"):
+                install.verify_installed(prepared)
+
+    def test_signed_component_checks_both_mac_architectures(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            info = self.fixtures(root / "artifacts")
+            prepared = root / "prepared"
+            install.prepare(root / "artifacts", prepared, info)
+            with patch.object(install.subprocess, "run") as command:
+                install.verify_installed(prepared, signed=True)
+                arguments = [call.args[0] for call in command.call_args_list]
+                self.assertEqual(sum(args[0] == "codesign" for args in arguments), 2)
+                self.assertEqual({args[-1] for args in arguments if args[0] == "lipo"},
+                                 {"arm64", "x86_64"})
+            with patch.object(install.subprocess, "run",
+                              side_effect=subprocess.CalledProcessError(1, "codesign")):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    install.verify_installed(prepared, signed=True)
+
+    def test_actual_component_zip_has_verified_native_resource_layout(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            info = self.fixtures(root / "artifacts")
+            prepared = root / "prepared"
+            manifest = install.prepare(root / "artifacts", prepared, info)
+            archive = root / "ollama.zip"
+            with zipfile.ZipFile(archive, "w") as package:
+                for path in prepared.rglob("*"):
+                    if path.is_file():
+                        package.write(path, "ollama.4dbase/Resources/bin/" + path.relative_to(prepared).as_posix())
+            component.verify_archive(archive, manifest, signed=False)
+            with zipfile.ZipFile(archive, "a") as package:
+                package.writestr("ollama.4dbase/Resources/bin/macOS/ollama-x86_64", "legacy")
+            with self.assertRaisesRegex(ValueError, "missing/extra"):
+                component.verify_archive(archive, manifest, signed=False)
+
+    def test_native_download_requires_published_complete_release_before_network_download(self):
+        expected = install.locked_source()
+        for release in (None, {"draft": True}, {"draft": False, "prerelease": True}):
+            with patch.object(install, "existing_release", return_value=release), \
+                    patch.object(install.subprocess, "run") as command:
+                with self.assertRaisesRegex(RuntimeError, "unavailable"):
+                    install.download_release(expected, Path("must-not-create"))
+                command.assert_not_called()
+        with patch.object(install, "existing_release",
+                          return_value={"draft": False, "prerelease": False, "assets": []}), \
+                patch.object(install.subprocess, "run") as command:
+            with self.assertRaisesRegex(ValueError, "incomplete/unexpected"):
+                install.download_release(expected, Path("must-not-create"))
+            command.assert_not_called()
+
+    def test_identical_component_skips_dispatch_and_version_churn(self):
+        with tempfile.TemporaryDirectory() as temp:
+            manifest = Path(temp) / "native-source.json"
+            manifest.write_text(json.dumps({"source": {"release_tag": "native-existing"}}))
+            env = {"GITHUB_REPOSITORY": "miyako/ollama", "GITHUB_REF": "refs/heads/main",
+                   "GITHUB_EVENT_NAME": "push"}
             with patch.dict(os.environ, env), \
-                    patch.object(publish, "verify_assets", return_value=(info, assets)), \
-                    patch.object(publish, "existing_release", return_value=None) as lookup, \
-                    patch.object(publish, "api", side_effect=[
-                        {"id": 123}, draft,
-                        {**draft, "draft": False, "html_url": "https://github.com/release"}]) as api, \
-                    patch.object(publish.subprocess, "run",
-                                 return_value=subprocess.CompletedProcess([], 1, "", "HTTP 404")):
-                publish.main()
-                lookup.assert_called_once()
-                self.assertEqual(api.call_args_list[1].args,
-                                 ("miyako/ollama", "releases/123"))
+                    patch.object(component, "component_matches", return_value=True), \
+                    patch.object(component.subprocess, "run") as command, \
+                    patch.object(component.subprocess, "check_output") as git:
+                component.dispatch(manifest)
+                command.assert_not_called()
+                git.assert_not_called()
+
+    def test_component_dispatch_requires_unchanged_main_and_exact_native_tag(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            info = self.fixtures(root / "artifacts")
+            manifest = root / "native-source.json"
+            manifest.write_text(json.dumps({"source": info}))
+            env = {"GITHUB_REPOSITORY": "miyako/ollama", "GITHUB_REF": "refs/heads/main",
+                   "GITHUB_EVENT_NAME": "push", "GITHUB_SHA": "b" * 40}
+            with patch.dict(os.environ, env), \
+                    patch.object(component, "component_matches", return_value=False), \
+                    patch.object(component, "api", return_value={"object": {"sha": "b" * 40}}), \
+                    patch.object(component.subprocess, "check_output", return_value="b" * 40 + "\n"), \
+                    patch.object(component.subprocess, "run") as command:
+                component.dispatch(manifest)
+                self.assertEqual(command.call_count, 1)
+                args = command.call_args.args[0]
+                self.assertIn("native_release_tag=" + info["release_tag"], args)
+                self.assertIn("source_sha=" + "b" * 40, args)
+                self.assertNotIn("--force", args)
+                with patch.object(component, "api", return_value={"object": {"sha": "c" * 40}}):
+                    with self.assertRaisesRegex(RuntimeError, "main changed"):
+                        component.dispatch(manifest)
+
+    def test_latest_legacy_component_needs_native_adoption_but_partial_new_release_fails(self):
+        with patch.object(component, "api", return_value={"tag_name": "20.1.5", "assets": []}):
+            self.assertFalse(component.component_matches({}))
+        with patch.object(component, "api", return_value={
+                "tag_name": "20.1.6", "assets": [{"name": "native-source.json", "state": "uploaded"}]}):
+            with self.assertRaisesRegex(ValueError, "incomplete/invalid"):
+                component.component_matches({})
+
+    def test_component_idempotence_checks_actual_provenance_and_archive_checksum_contract(self):
+        manifest = {"source": {"release_tag": "native-existing"}, "files": {}, "assets": {}}
+        data = {"ollama.zip": b"ZIP", "ollama.dmg": b"DMG",
+                "native-source.json": json.dumps(manifest).encode()}
+        data["SHA256SUMS"] = "".join(
+            f"{hashlib.sha256(data[name]).hexdigest()}  {name}\n"
+            for name in ("ollama.dmg", "ollama.zip", "native-source.json")).encode()
+
+        def metadata():
+            return {"tag_name": "20.1.6", "assets": [
+                {"name": name, "state": "uploaded", "size": len(value),
+                 "digest": "sha256:" + hashlib.sha256(value).hexdigest()}
+                for name, value in data.items()]}
+
+        def download(command, **_):
+            folder = Path(command[command.index("--dir") + 1])
+            for name in ("native-source.json", "SHA256SUMS"):
+                (folder / name).write_bytes(data[name])
+
+        with patch.object(component, "api", side_effect=lambda *_: metadata()), \
+                patch.object(component.subprocess, "run", side_effect=download):
+            self.assertTrue(component.component_matches(manifest))
+            self.assertFalse(component.component_matches({**manifest, "files": {"new": {}}}))
+            data["SHA256SUMS"] = b"bad archive checksum contract\n"
+            with self.assertRaisesRegex(ValueError, "archive checksum contract"):
+                component.component_matches(manifest)
+
+    def test_failed_component_build_reuses_unpublished_version_without_another_bump(self):
+        env = {"GITHUB_REPOSITORY": "miyako/ollama", "GITHUB_REF": "refs/heads/main",
+               "GITHUB_EVENT_NAME": "workflow_dispatch"}
+        cases = [
+            ("20.1.5", {"draft": False, "prerelease": False}, "true"),
+            ("20.1.6", None, "false"),
+        ]
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for current, release, expected in cases:
+                (root / "package.json").write_text(json.dumps({"version": current}))
+                output = root / "output"
+                output.write_text("")
+                with patch.dict(os.environ, {**env, "GITHUB_OUTPUT": str(output)}), \
+                        patch.object(component, "ROOT", root), \
+                        patch.object(component, "existing_release", return_value=release), \
+                        patch.object(component, "api", return_value={"tag_name": "20.1.5"}), \
+                        patch.object(component.subprocess, "run") as command:
+                    component.select_version()
+                    self.assertIn(f"bump={expected}\n", output.read_text())
+                    command.assert_not_called()
+            with patch.dict(os.environ, env), patch.object(component, "ROOT", root), \
+                    patch.object(component, "existing_release",
+                                 return_value={"draft": True, "prerelease": False}):
+                with self.assertRaisesRegex(RuntimeError, "requires inspection"):
+                    component.select_version()
+
+    def test_component_publication_is_immutable_complete_and_latest_only_after_id_verification(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / ".build").mkdir()
+            info = self.fixtures(root / "artifacts")
+            prepared = root / "prepared"
+            install.prepare(root / "artifacts", prepared, info)
+            dmg, archive, manifest = root / "ollama.dmg", root / "ollama.zip", prepared / "native-source.json"
+            dmg.write_bytes(b"DMG")
+            archive.write_bytes(b"ZIP")
+            head = "c" * 40
+
+            def release_api(repository, path, *arguments):
+                if path == "releases":
+                    self.assertIn("draft=true", arguments)
+                    self.assertIn("make_latest=false", arguments)
+                    return {"id": 123}
+                self.assertEqual(path, "releases/123")
+                if "PATCH" in arguments:
+                    self.assertIn("make_latest=true", arguments)
+                    return {"html_url": "https://github.com/component", "draft": False,
+                            "tag_name": "20.1.6", "target_commitish": head}
+                files = [dmg, archive, manifest, root / ".build/SHA256SUMS"]
+                return {"draft": True, "prerelease": False, "tag_name": "20.1.6",
+                        "target_commitish": head, "assets": [
+                            {"name": file.name, "size": file.stat().st_size, "state": "uploaded",
+                             "digest": "sha256:" + install.digest(file)} for file in files]}
+
+            env = {"GITHUB_REPOSITORY": "miyako/ollama", "GITHUB_REF": "refs/heads/main",
+                   "GITHUB_EVENT_NAME": "workflow_dispatch"}
+            with patch.dict(os.environ, env), patch.object(component, "ROOT", root), \
+                    patch.object(component, "verify_archive") as verify, \
+                    patch.object(component, "existing_release", return_value=None), \
+                    patch.object(component.subprocess, "check_output", return_value=head + "\n"), \
+                    patch.object(component.subprocess, "run",
+                                 return_value=subprocess.CompletedProcess([], 1, "", "HTTP 404")) as command, \
+                    patch.object(component, "api", side_effect=release_api) as api:
+                component.publish_component("20.1.6", dmg, archive, manifest)
+                verify.assert_called_once()
+                self.assertEqual(command.call_count, 2)
+                self.assertNotIn("--clobber", str(command.call_args_list))
                 self.assertIn("PATCH", api.call_args.args)
+                with patch.object(component, "existing_release", return_value={"draft": False}):
+                    with self.assertRaisesRegex(RuntimeError, "Refusing to overwrite"):
+                        component.publish_component("20.1.6", dmg, archive, manifest)
+                self.assertEqual(command.call_count, 2)
 
 
 if __name__ == "__main__":
