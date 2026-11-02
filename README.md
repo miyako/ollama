@@ -141,6 +141,9 @@ with complete architecture-specific payloads, and verifies the actual built
 `.4dbase/Resources/bin` files. It signs/notarizes as before, verifies the final ZIP's
 complete native resources/signatures and server health, and publishes ZIP, DMG,
 `native-source.json` and `SHA256SUMS` together from a new draft.
+The ZIP verifier recognizes valid AppleDouble metadata for expected files/directories:
+`ditto` preserves signing/provenance attributes in `._…` sidecars. It does not strip
+those attributes or exempt unexpected binaries, malformed metadata, or missing runtimes.
 Normal component-source changes still use the existing automatic Publish trigger;
 manual Publish retains `mode` and `use_self_hosted`.
 
