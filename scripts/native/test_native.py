@@ -57,11 +57,27 @@ class SourceTests(unittest.TestCase):
 class DetectTests(unittest.TestCase):
     def test_only_404_is_absent(self):
         with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess(
-                [], 1, "", "gh: Not Found (HTTP 404)")):
+                [], 1, "", "gh: Not Found (HTTP 404)")), \
+                patch.object(subprocess, "check_output", return_value="[[]]"):
             self.assertIsNone(detect.existing_release("miyako/ollama", "native-test"))
         with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess(
                 [], 1, "", "gh: Bad credentials (HTTP 401)")):
             with self.assertRaises(RuntimeError):
+                detect.existing_release("miyako/ollama", "native-test")
+
+    def test_draft_missing_from_tag_endpoint_is_found_in_paginated_list(self):
+        draft = {"id": 123, "tag_name": "native-test", "draft": True}
+        with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess(
+                [], 1, "", "gh: Not Found (HTTP 404)")), \
+                patch.object(subprocess, "check_output", return_value=json.dumps([[], [draft]])):
+            self.assertEqual(detect.existing_release("miyako/ollama", "native-test"), draft)
+
+    def test_draft_list_failure_is_not_treated_as_absent(self):
+        with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess(
+                [], 1, "", "gh: Not Found (HTTP 404)")), \
+                patch.object(subprocess, "check_output",
+                             side_effect=subprocess.CalledProcessError(1, "gh")):
+            with self.assertRaises(subprocess.CalledProcessError):
                 detect.existing_release("miyako/ollama", "native-test")
 
 
@@ -345,15 +361,119 @@ class PackageTests(unittest.TestCase):
             with patch.dict(os.environ, env), \
                     patch.object(publish, "verify_assets", return_value=(info, [Path("one.zip")])), \
                     patch.object(publish, "existing_release",
-                                 side_effect=[None, {"draft": True, "assets": []}]), \
+                                 return_value=None), \
+                    patch.object(publish, "api", side_effect=[
+                        {"id": 123},
+                        {"draft": True, "prerelease": False, "tag_name": env["RELEASE_TAG"],
+                         "target_commitish": info["recipe_sha"], "assets": []}]) as api, \
                     patch.object(publish.subprocess, "run",
-                                 return_value=subprocess.CompletedProcess([], 1, "", "HTTP 404")) as run, \
-                    patch.object(publish, "Path", side_effect=lambda _: Path(temp) / "notes.txt"):
+                                 return_value=subprocess.CompletedProcess([], 1, "", "HTTP 404")) as run:
                 with self.assertRaisesRegex(RuntimeError, "draft left unpublished"):
                     publish.main()
                 commands = [call.args[0] for call in run.call_args_list]
                 self.assertEqual(len(commands), 2)
-                self.assertNotIn("edit", commands[-1])
+                self.assertNotIn("PATCH", str(api.call_args_list))
+
+    def release_fixture(self, tag, info, assets):
+        return {
+            "id": 123, "tag_name": tag, "target_commitish": info["recipe_sha"],
+            "draft": True, "prerelease": False,
+            "assets": [{"name": path.name, "size": path.stat().st_size, "state": "uploaded",
+                        "digest": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()}
+                       for path in assets],
+        }
+
+    def test_draft_verification_refuses_unexpected_state_or_bytes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            downloads = Path(temp)
+            tag = self.fixtures(downloads)
+            info, assets = publish.verify_assets(downloads, tag)
+            release = self.release_fixture(tag, info, assets)
+            publish.verify_draft(release, tag, info, assets)
+            for change in [{"draft": False}, {"prerelease": True}, {"tag_name": "wrong"},
+                           {"target_commitish": "c" * 40}, {"assets": release["assets"][:-1]}]:
+                with self.assertRaisesRegex(RuntimeError, "draft left unpublished"):
+                    publish.verify_draft({**release, **change}, tag, info, assets)
+            for change in [{"digest": "sha256:" + "0" * 64}, {"size": 0}, {"state": "new"}]:
+                changed = {**release, "assets": [{**release["assets"][0], **change},
+                                                *release["assets"][1:]]}
+                with self.assertRaisesRegex(RuntimeError, "digest/size mismatch"):
+                    publish.verify_draft(changed, tag, info, assets)
+
+    def original_run(self, info):
+        run = {"event": "workflow_dispatch", "head_branch": "main",
+               "head_repository": {"full_name": "miyako/ollama"},
+               "path": ".github/workflows/native-build.yml", "status": "completed",
+               "conclusion": "failure", "head_sha": info["recipe_sha"]}
+        jobs = {"jobs": [{"name": name, "conclusion": "success"} for name in [
+            "source", "Verify complete release artifact contract (no publication)",
+            "build (macos-15, macos-arm64)", "build (macos-15-intel, macos-x86_64)",
+            "build (windows-2022, windows-x86_64)"]]
+            + [{"name": "publish / publish", "conclusion": "failure"}]}
+        return run, [jobs]
+
+    def test_resume_refuses_unverified_run_or_failed_native_build(self):
+        info = {"recipe_sha": "b" * 40}
+        run, pages = self.original_run(info)
+        for change in [{"event": "pull_request"}, {"head_branch": "other"},
+                       {"head_sha": "c" * 40}, {"status": "in_progress"},
+                       {"conclusion": "success"},
+                       {"path": ".github/workflows/other.yml"},
+                       {"head_repository": {"full_name": "attacker/fork"}}]:
+            with patch.object(publish, "api", return_value={**run, **change}):
+                with self.assertRaisesRegex(ValueError, "original failed main"):
+                    publish.verify_build_run("miyako/ollama", "42", info)
+        pages[0]["jobs"][2]["conclusion"] = "failure"
+        with patch.object(publish, "api", side_effect=[run, pages]):
+            with self.assertRaisesRegex(ValueError, "all original builds"):
+                publish.verify_build_run("miyako/ollama", "42", info)
+
+    def test_resume_uses_original_recipe_and_never_uploads_or_recreates_assets(self):
+        with tempfile.TemporaryDirectory() as temp:
+            downloads = Path(temp)
+            tag = self.fixtures(downloads)
+            info, assets = publish.verify_assets(downloads, tag)
+            draft = self.release_fixture(tag, info, assets)
+            run, jobs = self.original_run(info)
+            env = {"GITHUB_REPOSITORY": "miyako/ollama", "GITHUB_REF": "refs/heads/main",
+                   "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_SHA": "c" * 40,
+                   "RELEASE_TAG": tag, "SOURCE_RUN_ID": "42", "RESUME_DRAFT_ID": "123"}
+            with patch.dict(os.environ, env), \
+                    patch.object(publish, "verify_assets", return_value=(info, assets)), \
+                    patch.object(publish, "api", side_effect=[
+                        run, jobs, draft,
+                        {**draft, "draft": False, "html_url": "https://github.com/release"}]) as api, \
+                    patch.object(publish.subprocess, "run",
+                                 return_value=subprocess.CompletedProcess([], 1, "", "HTTP 404")) as command:
+                publish.main()
+                self.assertEqual(command.call_count, 1)
+                self.assertEqual(api.call_args.args,
+                                 ("miyako/ollama", "releases/123", "--method", "PATCH",
+                                  "-F", "draft=false", "-f", "make_latest=false"))
+                self.assertNotIn("POST", str(api.call_args_list))
+
+    def test_new_publication_uses_returned_release_id_not_tag_lookup(self):
+        with tempfile.TemporaryDirectory() as temp:
+            downloads = Path(temp)
+            tag = self.fixtures(downloads)
+            info, assets = publish.verify_assets(downloads, tag)
+            draft = self.release_fixture(tag, info, assets)
+            env = {"GITHUB_REPOSITORY": "miyako/ollama", "GITHUB_REF": "refs/heads/main",
+                   "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_SHA": info["recipe_sha"],
+                   "RELEASE_TAG": tag, "SOURCE_RUN_ID": "", "RESUME_DRAFT_ID": ""}
+            with patch.dict(os.environ, env), \
+                    patch.object(publish, "verify_assets", return_value=(info, assets)), \
+                    patch.object(publish, "existing_release", return_value=None) as lookup, \
+                    patch.object(publish, "api", side_effect=[
+                        {"id": 123}, draft,
+                        {**draft, "draft": False, "html_url": "https://github.com/release"}]) as api, \
+                    patch.object(publish.subprocess, "run",
+                                 return_value=subprocess.CompletedProcess([], 1, "", "HTTP 404")):
+                publish.main()
+                lookup.assert_called_once()
+                self.assertEqual(api.call_args_list[1].args,
+                                 ("miyako/ollama", "releases/123"))
+                self.assertIn("PATCH", api.call_args.args)
 
 
 if __name__ == "__main__":

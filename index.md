@@ -76,6 +76,10 @@ To publish, dispatch from this repository's `main` with `publish=true`: all thre
 native builds and isolated API checks must succeed, then a new `native-vVERSION-SHA12-rN`
 release is created without overwriting existing tags/assets or replacing the latest
 4D release. The publishing job alone receives write permission.
+Complete unpublished drafts can be explicitly resumed from the native publishing
+workflow using the original build run and draft IDs. Recovery verifies all nine
+uploaded asset digests and the original source/recipe without replacing assets;
+incomplete or unexpected drafts remain unpublished. See the README for recovery inputs.
 
 For local builds, install Python 3.11+, CMake 3.24+, Ninja, Git/`gh` and the Go version
 in upstream `go.mod` (1.26.10 at this pin), plus Xcode/Metal on Mac ARM or MSYS2 UCRT64
