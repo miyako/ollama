@@ -110,6 +110,10 @@ The reusable **Publish native Ollama release** workflow runs only after every na
 build and smoke check succeeds. Only its publishing job has `contents: write`.
 It verifies the complete three-target asset set, checksums and matching source/recipe
 metadata, creates a **new draft**, uploads all assets and then publishes it.
+Every successful matrix first runs the same artifact-contract verification in a
+read-only job, including on PRs. Locally, downloaded Actions artifacts can be checked
+with `python3 scripts/native/publish.py --verify-only .build/downloads`; this mode
+performs no GitHub write operations and does not create a release.
 Native release names are `native-vVERSION-SHA12-rN`; component tags are untouched.
 Existing tags/releases are refused, assets are never clobbered, and native releases
 are marked **not latest**, preserving the component's latest-release convention.

@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -109,6 +110,27 @@ class SmokeTests(unittest.TestCase):
 
 
 class PackageTests(unittest.TestCase):
+    def test_windows_toolchain_rejects_runner_fallback_and_mismatched_compiler(self):
+        with tempfile.TemporaryDirectory() as temp:
+            prefix = Path(temp).resolve() / "ucrt64"
+            licenses, compiler_bin = prefix / "share/licenses", prefix / "bin"
+            licenses.mkdir(parents=True)
+            compiler_bin.mkdir()
+            (licenses / "COPYING.RUNTIME").touch()
+            for name in ["gcc", "g++", "cmake", "ninja", "objdump"]:
+                (compiler_bin / f"{name}.exe").touch()
+            env = {"CC": str(compiler_bin / "gcc.exe"), "CXX": str(compiler_bin / "g++.exe")}
+            with patch.dict(os.environ, env), \
+                    patch.object(build.shutil, "which", side_effect=lambda name: str(compiler_bin / f"{name}.exe")), \
+                    patch.object(build.subprocess, "check_output", return_value="x86_64-w64-mingw32\n"):
+                self.assertEqual(build.windows_toolchain(licenses), compiler_bin)
+                with patch.object(build.shutil, "which", return_value="C:/mingw64/bin/gcc.exe"):
+                    with self.assertRaisesRegex(RuntimeError, "not a runner fallback"):
+                        build.windows_toolchain(licenses)
+                with patch.dict(os.environ, {"CC": "gcc"}):
+                    with self.assertRaisesRegex(RuntimeError, "installed UCRT64 compiler"):
+                        build.windows_toolchain(licenses)
+
     def test_windows_compiler_imports_are_bundled_recursively(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -173,6 +195,8 @@ class PackageTests(unittest.TestCase):
         source_info = {
             "tag": "v1.2.3", "sha": "a" * 40, "recipe": 1,
             "release_tag": "native-v1.2.3-aaaaaaaaaaaa-r1",
+            "recipe_dirty": False,
+            "recipe_sha": "b" * 40,
         }
         source_dir = downloads / "native-source"
         source_dir.mkdir()
@@ -200,6 +224,35 @@ class PackageTests(unittest.TestCase):
             assets[0].write_bytes(b"corrupted")
             with self.assertRaisesRegex(ValueError, "Checksum mismatch"):
                 publish.verify_assets(downloads, tag)
+
+    def test_verify_only_cli_needs_no_github_credentials_or_write_commands(self):
+        with tempfile.TemporaryDirectory() as temp:
+            downloads = Path(temp)
+            tag = self.fixtures(downloads)
+            env = {key: value for key, value in os.environ.items()
+                   if not key.startswith(("GH_", "GITHUB_"))}
+            env["PATH"] = ""
+            result = subprocess.run(
+                [sys.executable, str(Path(publish.__file__).resolve()),
+                 "--verify-only", str(downloads)], env=env, text=True, capture_output=True
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)["release_tag"], tag)
+            self.assertEqual(len(json.loads(result.stdout)["assets"]), 9)
+
+    def test_verify_only_cli_refuses_uncommitted_recipes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            downloads = Path(temp)
+            self.fixtures(downloads)
+            source_file = downloads / "native-source/source.json"
+            source_info = json.loads(source_file.read_text())
+            source_info["recipe_dirty"] = True
+            source_file.write_text(json.dumps(source_info))
+            result = subprocess.run(
+                [sys.executable, str(Path(publish.__file__).resolve()),
+                 "--verify-only", str(downloads)], text=True, capture_output=True
+            )
+            self.assertNotEqual(result.returncode, 0)
 
     def test_publisher_rejects_mixed_metadata(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -1,5 +1,6 @@
 """Publish only a complete, verified, new three-platform native release."""
 
+import argparse
 import hashlib
 import json
 import os
@@ -91,4 +92,17 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--verify-only", type=Path,
+                        help="Verify downloaded matrix artifacts without any GitHub write operations")
+    args = parser.parse_args()
+    if args.verify_only:
+        info = json.loads((args.verify_only / "native-source/source.json").read_text())
+        source, assets = verify_assets(args.verify_only, info["release_tag"])
+        if source["recipe_dirty"]:
+            raise ValueError("Artifacts were built from an uncommitted recipe")
+        print(json.dumps({"release_tag": source["release_tag"],
+                          "recipe_sha": source["recipe_sha"],
+                          "assets": [asset.name for asset in assets]}, indent=2))
+    else:
+        main()

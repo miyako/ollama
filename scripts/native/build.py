@@ -110,6 +110,30 @@ def bundle_windows_imports(payload, compiler_bin, system_root):
             pending.append(dependency)
 
 
+def windows_toolchain(licenses):
+    if not licenses or not licenses.is_dir():
+        raise RuntimeError("--runtime-licenses must point to the installed UCRT64 compiler license directory")
+    prefix = licenses.resolve().parent.parent
+    compiler_bin = prefix / "bin"
+    if prefix.name.lower() != "ucrt64" or licenses.resolve() != prefix / "share/licenses":
+        raise RuntimeError(f"Expected an MSYS2 UCRT64 share/licenses directory: {licenses}")
+    for variable, name in [("CC", "gcc"), ("CXX", "g++")]:
+        configured = os.environ.get(variable)
+        expected = compiler_bin / f"{name}.exe"
+        if not configured or Path(configured).resolve() != expected or not expected.is_file():
+            raise RuntimeError(f"{variable} must be the installed UCRT64 compiler: {expected}")
+    for name in ["gcc", "g++", "cmake", "ninja", "objdump"]:
+        actual = shutil.which(name)
+        if not actual or Path(actual).resolve() != compiler_bin / f"{name}.exe":
+            raise RuntimeError(f"PATH must select UCRT64 {name}, not a runner fallback: {actual}")
+    target = subprocess.check_output([str(compiler_bin / "gcc.exe"), "-dumpmachine"], text=True).strip()
+    if target != "x86_64-w64-mingw32":
+        raise RuntimeError(f"Unexpected UCRT64 compiler target: {target}")
+    if not list(licenses.rglob("COPYING.RUNTIME")):
+        raise RuntimeError(f"GCC runtime exception notice missing from {licenses}")
+    return compiler_bin
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, default=ROOT / ".build/upstream")
@@ -124,6 +148,7 @@ def main():
     if host not in TARGETS:
         raise RuntimeError(f"No native build recipe for {host}; use a supported native host")
     target, layout, binary, mlx = TARGETS[host]
+    compiler_bin = windows_toolchain(args.runtime_licenses) if os.name == "nt" else None
     source, build = args.source.resolve(), args.build.resolve()
     info = json.loads(args.info.read_text())
     actual = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True).strip()
@@ -171,13 +196,8 @@ def main():
     shutil.copy2(prefix / "bin" / original_binary, payload / binary)
     shutil.copy2(source / "LICENSE", payload / "LICENSE")
     if os.name == "nt":
-        if not args.runtime_licenses or not args.runtime_licenses.is_dir():
-            raise RuntimeError("--runtime-licenses must point to the MSYS2 compiler license directory")
         shutil.copytree(args.runtime_licenses, payload / "compiler-licenses")
-        compiler = shutil.which("gcc")
-        if not compiler:
-            raise RuntimeError("The UCRT64 GCC compiler must remain in PATH for the import audit")
-        bundle_windows_imports(payload, Path(compiler).parent, Path(os.environ["SystemRoot"]))
+        bundle_windows_imports(payload, compiler_bin, Path(os.environ["SystemRoot"]))
     require_payload(payload, mlx)
     if platform.system() == "Darwin":
         check_macos_libraries(payload)

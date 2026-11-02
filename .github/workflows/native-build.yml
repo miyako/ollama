@@ -136,6 +136,7 @@ jobs:
           fi
       - name: Install upstream-supported UCRT64 CPU toolchain
         if: runner.os == 'Windows'
+        id: msys2
         uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
@@ -147,10 +148,19 @@ jobs:
       - name: Select Windows native compilers
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          MSYS2_ROOT: ${{ steps.msys2.outputs.msys2-location }}
         run: |
-          'C:\msys64\ucrt64\bin' | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          'CC=gcc' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          'CXX=g++' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $prefix = Join-Path $env:MSYS2_ROOT 'ucrt64'
+          $bin = Join-Path $prefix 'bin'
+          $licenses = Join-Path $prefix 'share/licenses'
+          foreach ($path in @("$bin/gcc.exe", "$bin/g++.exe", "$bin/cmake.exe", "$bin/ninja.exe", $licenses)) {
+            if (-not (Test-Path $path)) { throw "Missing installed UCRT64 toolchain path: $path" }
+          }
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "CC=$bin/gcc.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CXX=$bin/g++.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "RUNTIME_LICENSES=$licenses" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Build, install, isolated smoke and package
         shell: bash
         env:
@@ -158,7 +168,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$TARGET" == windows-x86_64 ]]; then
-            python scripts/native/build.py --runtime-licenses C:/msys64/ucrt64/share/licenses
+            python scripts/native/build.py --runtime-licenses "$RUNTIME_LICENSES"
           else
             python scripts/native/build.py
           fi
@@ -180,8 +190,27 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  publish:
+  verify:
+    name: Verify complete release artifact contract (no publication)
     needs: [source, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: .build/downloads
+      - name: Validate real matrix outputs without release permissions
+        run: python scripts/native/publish.py --verify-only .build/downloads
+
+  publish:
+    needs: [source, verify]
     if: >-
       github.event_name == 'workflow_dispatch' && inputs.publish &&
       github.repository == 'miyako/ollama' && github.ref == 'refs/heads/main'
