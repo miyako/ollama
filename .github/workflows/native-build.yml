@@ -24,6 +24,7 @@ on:
         default: false
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -215,6 +216,7 @@ jobs:
       github.event_name == 'workflow_dispatch' && inputs.publish &&
       github.repository == 'miyako/ollama' && github.ref == 'refs/heads/main'
     permissions:
+      actions: read
       contents: write
     uses: ./.github/workflows/native-publish.yml
     with:

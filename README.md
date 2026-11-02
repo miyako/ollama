@@ -117,6 +117,8 @@ The reusable **Publish native Ollama release** workflow runs only after every na
 build and smoke check succeeds. Only its publishing job has `contents: write`.
 It verifies the complete three-target asset set, checksums and matching source/recipe
 metadata, creates a **new draft**, uploads all assets and then publishes it.
+Draft verification and finalization use the release ID, since GitHub's tag endpoint
+can return 404 until an unpublished draft's tag is created.
 Every successful matrix first runs the same artifact-contract verification in a
 read-only job, including on PRs. Locally, downloaded Actions artifacts can be checked
 with `python3 scripts/native/publish.py --verify-only .build/downloads`; this mode
@@ -125,8 +127,16 @@ Native release names are `native-vVERSION-SHA12-rN`; component tags are untouche
 Existing tags/releases are refused, assets are never clobbered, and native releases
 are marked **not latest**, preserving the component's latest-release convention.
 Failed uploads leave an unpublished draft for inspection, not a partially published
-release. Retrying publication requires explicitly removing that failed draft/tag after
-inspection or incrementing `recipe` in the reviewed pin; it is not an overwrite switch.
+release. A complete draft can be resumed by manually dispatching **Publish native
+Ollama release** (`native-publish.yml`) from `main`, specifying its exact `release_tag`,
+original `source_run_id`, and `draft_release_id`. Recovery requires a completed,
+failed main publication run whose three builds and artifact-contract job all passed.
+It downloads that run's artifacts, verifies the original source/recipe and the draft's
+target, and compares all nine uploaded asset sizes and SHA-256 digests before publishing
+by ID with `latest=false`. Recovery never uploads, replaces or deletes assets, and refuses
+published, incomplete or unexpected releases. Manifests retain the **original build
+recipe commit**; the recovery Actions run separately records the publishing-code revision.
+An incomplete draft must be inspected and handled explicitly; there is no overwrite switch.
 
 Use the Actions artifacts to review scheduled updates before publishing. To adopt a
 new default pin, update `scripts/native/upstream.json` with the verified stable tag,
