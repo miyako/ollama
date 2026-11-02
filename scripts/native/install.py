@@ -126,8 +126,10 @@ def verify_installed(destination, signed=False):
     validate_source(manifest["source"], manifest["source"])
     actual = {path.relative_to(destination).as_posix()
               for path in destination.rglob("*") if path.is_file()}
-    if actual != set(manifest["files"]) | {"native-source.json"}:
-        raise ValueError("Component native resources contain missing/extra files (including legacy binaries)")
+    expected = set(manifest["files"]) | {"native-source.json"}
+    if actual != expected:
+        raise ValueError("Component native resources contain missing/extra files (including legacy binaries): "
+                         f"missing={sorted(expected - actual)}, extra={sorted(actual - expected)}")
     for name, info in manifest["files"].items():
         path = destination / name
         if path.is_symlink() or ".." in PurePosixPath(name).parts or PurePosixPath(name).is_absolute():

@@ -165,3 +165,14 @@ jobs:
         run: |
           security delete-keychain "$KEYCHAIN_PATH"
           rm -f "$CERTIFICATE_PATH"
+      - name: Preserve failed signed package diagnostics
+        if: failure() && steps.zip.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: component-publish-diagnostics
+          path: |
+            ${{ steps.zip.outputs.zip_path }}
+            .build/component-native/native-source.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7

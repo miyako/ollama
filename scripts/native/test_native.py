@@ -1,7 +1,8 @@
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import struct
 import subprocess
 import sys
 import tempfile
@@ -507,6 +508,12 @@ class PackageTests(unittest.TestCase):
 
 
 class ComponentIntegrationTests(unittest.TestCase):
+    def apple_double_metadata(self):
+        return (struct.pack(">II16sH", 0x00051607, 0x00020000, b"Mac OS X        ", 2)
+                + struct.pack(">III", 9, 50, 32)
+                + struct.pack(">III", 2, 82, 0)
+                + bytes(32))
+
     def fixtures(self, downloads):
         source_info = {**install.locked_source(), "recipe_sha": "b" * 40, "recipe_dirty": False}
         (downloads / "native-source").mkdir(parents=True)
@@ -625,6 +632,42 @@ class ComponentIntegrationTests(unittest.TestCase):
                 package.writestr("ollama.4dbase/Resources/bin/macOS/ollama-x86_64", "legacy")
             with self.assertRaisesRegex(ValueError, "missing/extra"):
                 component.verify_archive(archive, manifest, signed=False)
+
+    def test_signed_json_appledouble_sidecars_are_metadata_not_extra_runtime_files(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            info = self.fixtures(root / "artifacts")
+            prepared = root / "prepared"
+            manifest = install.prepare(root / "artifacts", prepared, info)
+            archive = root / "ollama.zip"
+            with zipfile.ZipFile(archive, "w") as package:
+                prefix = "ollama.4dbase/Resources/bin/"
+                for path in prepared.rglob("*"):
+                    if path.is_file():
+                        package.write(path, prefix + path.relative_to(prepared).as_posix())
+                for name in ("._native-source.json", "macOS/arm64/._BUILD-INFO.json", "macOS/._arm64"):
+                    package.writestr(prefix + name, self.apple_double_metadata())
+            component.verify_archive(archive, manifest, signed=False)
+            with zipfile.ZipFile(archive, "a") as package:
+                package.writestr(prefix + "._unexpected-binary", self.apple_double_metadata())
+            with self.assertRaisesRegex(ValueError, "Unexpected component metadata sidecar"):
+                component.verify_archive(archive, manifest, signed=False)
+
+    def test_appledouble_recognition_rejects_malformed_and_data_fork_entries(self):
+        name = PurePosixPath("._native-source.json")
+        allowed = {"native-source.json"}
+        valid = self.apple_double_metadata()
+        self.assertTrue(component.apple_double(name, valid, allowed))
+        invalid = [
+            b"not metadata", b"BAD!" + valid[4:],
+            valid[:24] + struct.pack(">H", 3) + valid[26:],
+            valid[:26] + struct.pack(">III", 1, 50, 32) + valid[38:],
+            valid[:26] + struct.pack(">III", 9, 1000, 32) + valid[38:],
+            valid[:38] + struct.pack(">III", 2, 60, 10) + valid[50:],
+        ]
+        for data in invalid:
+            with self.assertRaises(ValueError):
+                component.apple_double(name, data, allowed)
 
     def test_native_download_requires_published_complete_release_before_network_download(self):
         expected = install.locked_source()

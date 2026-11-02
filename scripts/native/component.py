@@ -6,6 +6,7 @@ import os
 from pathlib import Path, PurePosixPath
 import platform
 import re
+import struct
 import subprocess
 import tempfile
 import zipfile
@@ -109,6 +110,32 @@ def select_version():
     print("Bump published component version" if bump else f"Reuse unpublished {current} after an earlier failed build")
 
 
+def apple_double(relative, data, expected_entries):
+    if not relative.name.startswith("._"):
+        return False
+    counterpart = (relative.parent / relative.name[2:]).as_posix()
+    if counterpart not in expected_entries or len(data) < 26:
+        raise ValueError(f"Unexpected component metadata sidecar: {relative}")
+    magic, version, _, count = struct.unpack(">II16sH", data[:26])
+    table_end = 26 + count * 12
+    if magic != 0x00051607 or version != 0x00020000 or count not in (1, 2) or table_end > len(data):
+        raise ValueError(f"Invalid AppleDouble header: {relative}")
+    entries = [struct.unpack(">III", data[26 + index * 12:38 + index * 12])
+               for index in range(count)]
+    identifiers = {identifier for identifier, _, _ in entries}
+    if len(identifiers) != count or 9 not in identifiers or not identifiers <= {2, 9}:
+        raise ValueError(f"Unexpected AppleDouble entry types: {relative}")
+    occupied = []
+    for identifier, offset, length in entries:
+        if offset < table_end or offset + length > len(data) or (identifier == 9 and length < 32):
+            raise ValueError(f"Invalid AppleDouble entry bounds: {relative}")
+        if length:
+            if any(offset < end and start < offset + length for start, end in occupied):
+                raise ValueError(f"Overlapping AppleDouble entries: {relative}")
+            occupied.append((offset, offset + length))
+    return True
+
+
 def verify_archive(archive, expected_manifest, signed):
     with tempfile.TemporaryDirectory(prefix="ollama-component-zip-") as temp:
         root = Path(temp)
@@ -118,16 +145,28 @@ def verify_archive(archive, expected_manifest, signed):
             if len(manifests) != 1:
                 raise ValueError("Component ZIP must contain exactly one native resource manifest")
             prefix = manifests[0][:-len("native-source.json")]
+            expected_files = set(expected_manifest["files"]) | {"native-source.json"}
+            expected_entries = expected_files | {
+                parent.as_posix() for name in expected_files for parent in PurePosixPath(name).parents
+                if parent != PurePosixPath(".")}
+            seen = set()
             for entry in package.infolist():
                 if not entry.filename.startswith(prefix) or entry.is_dir():
                     continue
                 relative = PurePosixPath(entry.filename[len(prefix):])
                 if relative.is_absolute() or ".." in relative.parts or "\\" in str(relative):
                     raise ValueError("Unsafe component ZIP resource path")
+                if relative in seen:
+                    raise ValueError(f"Duplicate component ZIP resource: {relative}")
+                seen.add(relative)
+                data = package.read(entry)
+                # ditto preserves codesigned data-file xattrs as AppleDouble
+                # sidecars; these are metadata, not additional runtime files.
+                if apple_double(relative, data, expected_entries):
+                    continue
                 output = root / str(relative)
                 output.parent.mkdir(parents=True, exist_ok=True)
-                with package.open(entry) as incoming:
-                    output.write_bytes(incoming.read())
+                output.write_bytes(data)
                 output.chmod(entry.external_attr >> 16 & 0o777)
         actual = verify_installed(root, signed)
         if actual != expected_manifest:
