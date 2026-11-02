@@ -8,3 +8,5 @@ ollama/Project/DerivedData/*
 ollama/Libraries/lib4d-arm64.dylib
 ollama/Resources/bin/Windows/ollama.exe
 ollama/Resources/bin/macOS/ollama
+.build/
+__pycache__/

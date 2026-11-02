@@ -20,6 +20,14 @@ Class constructor($executableName : Text; $controller : 4D:C1709.Class)
 	
 	This:C1470._currentDirectory:=This:C1470.expand(Folder:C1567("/RESOURCES/bin").folder(This:C1470.platform))
 	
+	If (Is macOS:C1572)
+		var $architecture : Text
+		$architecture:=Get system info:C1571.processor="@Apple@" ? "arm64" : "x86_64"
+		If (This:C1470._currentDirectory.folder($architecture).file(This:C1470.executableName).exists)
+			This:C1470._currentDirectory:=This:C1470._currentDirectory.folder($architecture)
+		End if
+	End if
+
 	This:C1470._executableFile:=File:C1566(This:C1470.currentDirectory.file(This:C1470.executableName).path)
 	
 	If (This:C1470._executableFile.exists)
