@@ -66,6 +66,22 @@ class DetectTests(unittest.TestCase):
 
 
 class SmokeTests(unittest.TestCase):
+    def test_shutdown_requires_zero_exit_after_graceful_signal(self):
+        process = unittest.mock.Mock(returncode=0)
+        process.poll.return_value = None
+        smoke.stop_server(process)
+        process.terminate.assert_called_once()
+        process.wait.assert_called_once_with(timeout=30)
+        process.kill.assert_not_called()
+
+    def test_hung_shutdown_is_cleaned_up_but_fails(self):
+        process = unittest.mock.Mock(returncode=0)
+        process.poll.return_value = None
+        process.wait.side_effect = [subprocess.TimeoutExpired("serve", 30), 0]
+        with self.assertRaisesRegex(RuntimeError, "graceful signal shutdown"):
+            smoke.stop_server(process)
+        process.kill.assert_called_once()
+
     def test_mlx_requires_initialization_and_exact_missing_manifest_error(self):
         smoke.validate_mlx_result(subprocess.CompletedProcess(
             [], 1, "", 'msg="MLX engine initialized" device=gpu\nError: file does not exist\n'))
@@ -104,12 +120,48 @@ class SmokeTests(unittest.TestCase):
                     patch.object(smoke.subprocess, "Popen") as popen, \
                     patch.object(smoke.urllib.request, "build_opener") as opener:
                 popen.return_value.poll.return_value = 1
-                with self.assertRaisesRegex(RuntimeError, "server exited"):
+                popen.return_value.returncode = 1
+                with self.assertRaises(RuntimeError):
                     smoke.smoke(binary, "1.2.3", Path(temp) / "smoke.log")
                 opener.assert_not_called()
 
 
 class PackageTests(unittest.TestCase):
+    def test_windows_gc_patch_is_idempotent_and_fails_closed(self):
+        original = """int llama_server(int argc, char ** argv) {
+    common_params params;
+
+    common_init();
+
+    // start the stream session manager GC right after common init, before any HTTP route can
+    // touch it. lifecycle is symmetric, stop_gc() runs in clean_up() before backend free
+    server_stream_session_manager_start();
+
+    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SERVER)) {
+        return 1;
+    }
+
+    SRV_INF("%s", "initializing ...\\n");
+
+    llama_backend_init();
+}
+"""
+        with tempfile.TemporaryDirectory() as temp:
+            checkout = Path(temp)
+            subprocess.run(["git", "init", "--quiet", str(checkout)], check=True)
+            code = checkout / "tools/server/server.cpp"
+            code.parent.mkdir(parents=True)
+            code.write_text(original)
+            patches = build.patch_windows_helpers(checkout)
+            changed = code.read_text()
+            self.assertLess(changed.index("common_params_parse"), changed.index("server_stream_session_manager_start"))
+            self.assertIn("windows-helper-gc.patch", patches)
+            self.assertEqual(patches, build.patch_windows_helpers(checkout))
+            self.assertEqual(code.read_text(), changed)
+            code.write_text("unexpected source\n")
+            with self.assertRaises(subprocess.CalledProcessError):
+                build.patch_windows_helpers(checkout)
+
     def test_windows_toolchain_rejects_runner_fallback_and_mismatched_compiler(self):
         with tempfile.TemporaryDirectory() as temp:
             prefix = Path(temp).resolve() / "ucrt64"

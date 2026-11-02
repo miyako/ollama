@@ -30,6 +30,13 @@ not just `go build`, and never download official Ollama binaries.
 CMake builds the actual CLI/server, patched pinned llama.cpp `llama-server` and
 `llama-quantize`, and native runtime libraries. On Apple Silicon it also builds MLX,
 MLX-C, XGrammar and Metal assets from upstream-selected sources.
+On Windows, recipe 2 also applies the small reviewed
+[`windows-helper-gc.patch`](scripts/native/patches/windows-helper-gc.patch) to
+llama.cpp: start the stream-session GC only after argument parsing. Otherwise
+`--version`/`--list-devices` exit while its GC thread is live, hanging at Windows
+DLL teardown. Real Actions reproduced the hang; the patch keeps the helper
+exit checks rather than accepting or masking a timeout. Its SHA-256 is recorded
+in `BUILD-INFO.json`, alongside the underlying native revision.
 
 | Archive target | Native CI runner | Inference payload | Minimum / limitations |
 |---|---|---|---|
@@ -165,6 +172,8 @@ an intentionally missing local manifest, expecting initialization followed by a
 file-not-found error, without a model download.
 The server binds `127.0.0.1:0`; checks use only its logged OS-assigned listener,
 not a pre-existing server on 11434/8080. Only the spawned server is terminated.
+Shutdown must exit cleanly after SIGTERM (macOS) or a process-group CTRL_BREAK
+signal (Windows); a timeout/forced cleanup fails the smoke instead of passing.
 No large models are downloaded. CI on Intel/Windows and a 4D integration run are
 still required before treating those environments as validated locally.
 Packaging also audits Mach-O architecture/library paths on macOS and recursively

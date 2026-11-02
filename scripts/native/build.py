@@ -134,6 +134,16 @@ def windows_toolchain(licenses):
     return compiler_bin
 
 
+def patch_windows_helpers(checkout):
+    patch = ROOT / "scripts/native/patches/windows-helper-gc.patch"
+    applied = subprocess.run(["git", "apply", "--reverse", "--check", str(patch)],
+                             cwd=checkout, capture_output=True, text=True)
+    if applied.returncode != 0:
+        run("git", "apply", "--check", patch, cwd=checkout)
+        run("git", "apply", patch, cwd=checkout)
+    return {patch.name: hashlib.sha256(patch.read_bytes()).hexdigest()}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, default=ROOT / ".build/upstream")
@@ -186,6 +196,11 @@ def main():
                    CGO_CXXFLAGS="-O3 -mmacosx-version-min=14.0",
                    CGO_LDFLAGS="-mmacosx-version-min=14.0")
     run(*cmake, env=env)
+    patches = {}
+    if os.name == "nt":
+        # Fetch upstream's pinned source and apply its compatibility layer first.
+        run("cmake", "--build", build, "--target", "ollama-llama-cpp-source", env=env)
+        patches = patch_windows_helpers(build / "_deps/llama_cpp-src")
     run("cmake", "--build", build, "--parallel", args.jobs, env=env)
     # This target is not part of ALL upstream; collect notices before installing.
     run("cmake", "--build", build, "--target", "ollama-go-license", env=env)
@@ -207,7 +222,7 @@ def main():
             dependencies[str(checkout.relative_to(build))] = subprocess.check_output(
                 ["git", "rev-parse", "HEAD"], cwd=checkout, text=True).strip()
     info.update(target=target, acceleration="Metal + MLX Metal v3" if mlx else "CPU only",
-                native_revisions=dependencies,
+                native_revisions=dependencies, native_patches=patches,
                 host=platform.platform(),
                 tools={tool: subprocess.check_output([tool, *flags], cwd=source,
                                                      text=True).splitlines()[0]

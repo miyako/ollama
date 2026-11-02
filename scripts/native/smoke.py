@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 import tempfile
 import time
@@ -41,6 +42,23 @@ def validate_mlx_result(result):
         raise RuntimeError(f"MLX initialization smoke failed: {output}")
 
 
+def stop_server(process):
+    if process.poll() is None:
+        try:
+            if os.name == "nt":
+                process.send_signal(signal.CTRL_BREAK_EVENT)
+            else:
+                process.terminate()
+            process.wait(timeout=30)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=10)
+            raise RuntimeError("Server did not complete graceful signal shutdown") from error
+    if process.returncode != 0:
+        raise RuntimeError(f"Server shutdown exited with {process.returncode}")
+
+
 def smoke(executable, version, log_path):
     executable = executable.resolve(strict=True)
     runtime = executable.parent / "lib/ollama"
@@ -71,7 +89,9 @@ def smoke(executable, version, log_path):
             validate_mlx_result(mlx)
         with log_path.open("w") as log:
             process = subprocess.Popen([str(executable), "serve"], cwd=home,
-                                       env=env, stdout=log, stderr=subprocess.STDOUT)
+                                       env=env, stdout=log, stderr=subprocess.STDOUT,
+                                       **({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+                                          if os.name == "nt" else {}))
             try:
                 deadline = time.monotonic() + 120
                 address = None
@@ -105,15 +125,10 @@ def smoke(executable, version, log_path):
                                cwd=home, check=True, timeout=30)
                 if process.poll() is not None:
                     raise RuntimeError("New server died during smoke checks")
-                print(f"PASS: {executable.name}, {base}, version={version}, empty model store")
             finally:
-                if process.poll() is None:
-                    process.terminate()
-                    try:
-                        process.wait(timeout=20)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait(timeout=10)
+                stop_server(process)
+            print(f"PASS: {executable.name}, {base}, version={version}, "
+                  "empty model store, graceful shutdown exit=0")
 
 
 if __name__ == "__main__":
