@@ -1,0 +1,221 @@
+name: Build Ollama from source
+
+on:
+  pull_request:
+    paths: ['scripts/native/**', '.github/workflows/native-*.yml']
+  push:
+    branches: [main]
+    paths: ['scripts/native/**', '.github/workflows/native-*.yml']
+  schedule:
+    - cron: '23 6 * * 2'
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: 'Published stable upstream tag (empty = latest stable)'
+        type: string
+        default: ''
+      expected_sha:
+        description: 'Optional full upstream SHA to enforce when resolving a manual tag'
+        type: string
+        default: ''
+      publish:
+        description: 'Publish a NEW native release after all smoke checks (main only)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+      tag: ${{ steps.source.outputs.tag }}
+      version: ${{ steps.source.outputs.version }}
+      release_tag: ${{ steps.source.outputs.release_tag }}
+      build: ${{ steps.detect.outputs.build }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test build tooling
+        run: python -m unittest discover -s scripts/native -p 'test_*.py' -v
+      - name: Check publication scope
+        if: inputs.publish
+        shell: bash
+        run: |
+          test "$GITHUB_REPOSITORY" = miyako/ollama
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+      - name: Resolve release to immutable source
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          UPSTREAM_TAG: ${{ inputs.upstream_tag }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          selection=pinned
+          if [[ "$EVENT" == schedule || "$EVENT" == workflow_dispatch ]]; then
+            selection=latest
+            if [[ -n "$UPSTREAM_TAG" ]]; then selection=tag; fi
+          fi
+          python scripts/native/source.py --selection "$selection" \
+            --tag "$UPSTREAM_TAG" --expected-sha "$EXPECTED_SHA"
+          cat .build/source.json >> "$GITHUB_STEP_SUMMARY"
+      - name: Skip already published scheduled revision
+        id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+        run: python scripts/native/detect.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-source
+          path: .build/source.json
+          if-no-files-found: error
+
+  build:
+    needs: source
+    if: needs.source.outputs.build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: macos-arm64
+          - runner: macos-15-intel
+            target: macos-x86_64
+          - runner: windows-2022
+            target: windows-x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-source
+          path: .build
+      - uses: actions/checkout@v4
+        with:
+          repository: ollama/ollama
+          ref: ${{ needs.source.outputs.sha }}
+          path: .build/upstream
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: .build/upstream/go.mod
+          cache: false
+      - name: Check macOS native tools
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          cmake --version
+          ninja --version
+          if [[ "$(uname -m)" == arm64 ]]; then
+            if ! xcrun --find metal; then
+              xcodebuild -downloadComponent MetalToolchain
+            fi
+            xcrun -sdk macosx metal --version
+          fi
+      - name: Install upstream-supported UCRT64 CPU toolchain
+        if: runner.os == 'Windows'
+        id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+      - name: Select Windows native compilers
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          MSYS2_ROOT: ${{ steps.msys2.outputs.msys2-location }}
+        run: |
+          $prefix = Join-Path $env:MSYS2_ROOT 'ucrt64'
+          $bin = Join-Path $prefix 'bin'
+          $licenses = Join-Path $prefix 'share/licenses'
+          foreach ($path in @("$bin/gcc.exe", "$bin/g++.exe", "$bin/cmake.exe", "$bin/ninja.exe", $licenses)) {
+            if (-not (Test-Path $path)) { throw "Missing installed UCRT64 toolchain path: $path" }
+          }
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "CC=$bin/gcc.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CXX=$bin/g++.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "RUNTIME_LICENSES=$licenses" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Build, install, isolated smoke and package
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          if [[ "$TARGET" == windows-x86_64 ]]; then
+            python scripts/native/build.py --runtime-licenses "$RUNTIME_LICENSES"
+          else
+            python scripts/native/build.py
+          fi
+      - name: Keep build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-logs-${{ matrix.target }}
+          path: |
+            .build/native/smoke.log
+            .build/native/mlx-smoke.log
+            .build/native/CMakeCache.txt
+            .build/native/CMakeFiles/CMakeConfigureLog.yaml
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.target }}
+          path: .build/artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+
+  verify:
+    name: Verify complete release artifact contract (no publication)
+    needs: [source, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: .build/downloads
+      - name: Validate real matrix outputs without release permissions
+        run: python scripts/native/publish.py --verify-only .build/downloads
+
+  publish:
+    needs: [source, verify]
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.publish &&
+      github.repository == 'miyako/ollama' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/native-publish.yml
+    with:
+      release_tag: ${{ needs.source.outputs.release_tag }}
