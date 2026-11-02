@@ -25,7 +25,7 @@ def verify_build_run(repository, run_id, source):
     if not re.fullmatch(r"[1-9][0-9]*", run_id):
         raise ValueError("Invalid source build run ID")
     run = api(repository, f"actions/runs/{run_id}")
-    if (run["event"] != "workflow_dispatch" or run["head_branch"] != "main"
+    if (run["event"] not in {"push", "schedule", "workflow_dispatch"} or run["head_branch"] != "main"
             or run["head_repository"]["full_name"] != repository
             or run["path"] != ".github/workflows/native-build.yml"
             or run["status"] != "completed" or run["conclusion"] != "failure"
@@ -47,10 +47,14 @@ def verify_draft(release, tag, source, assets):
     if (not release["draft"] or release["prerelease"] or release["tag_name"] != tag
             or release["target_commitish"] != source["recipe_sha"]):
         raise RuntimeError("Unexpected draft state, tag or target; draft left unpublished")
+    verify_uploaded_assets(release, assets)
+
+
+def verify_uploaded_assets(release, assets):
     uploaded = release["assets"]
     if (len(uploaded) != len(assets)
             or {asset["name"] for asset in uploaded} != {path.name for path in assets}):
-        raise RuntimeError("Draft asset set mismatch; draft left unpublished")
+        raise RuntimeError("Release asset set mismatch; release left unchanged")
     by_name = {asset["name"]: asset for asset in uploaded}
     for path in assets:
         asset = by_name[path.name]
@@ -58,7 +62,7 @@ def verify_draft(release, tag, source, assets):
             digest = "sha256:" + hashlib.file_digest(stream, "sha256").hexdigest()
         if (asset["state"] != "uploaded" or asset["size"] != path.stat().st_size
                 or asset.get("digest") != digest):
-            raise RuntimeError(f"Draft asset digest/size mismatch: {path.name}; draft left unpublished")
+            raise RuntimeError(f"Release asset digest/size mismatch: {path.name}; release left unchanged")
 
 
 def verify_assets(downloads, tag):
@@ -98,8 +102,8 @@ def verify_assets(downloads, tag):
 def main():
     if (os.environ["GITHUB_REPOSITORY"] != "miyako/ollama"
             or os.environ["GITHUB_REF"] != "refs/heads/main"
-            or os.environ["GITHUB_EVENT_NAME"] != "workflow_dispatch"):
-        raise RuntimeError("Publication is restricted to explicit dispatches from miyako/ollama main")
+            or os.environ["GITHUB_EVENT_NAME"] not in {"push", "schedule", "workflow_dispatch"}):
+        raise RuntimeError("Publication is restricted to trusted main build events in miyako/ollama")
     repository, tag = os.environ["GITHUB_REPOSITORY"], os.environ["RELEASE_TAG"]
     source, assets = verify_assets(Path(".build/downloads"), tag)
     resume_id = os.environ.get("RESUME_DRAFT_ID", "")

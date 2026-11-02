@@ -1,9 +1,8 @@
 name: Publish
-  
+
 on:
   push:
-    branches:
-    - main
+    branches: [main]
     paths:
       - '*/Project/Sources/**/*.4dm'
       - '*/Project/Sources/*/*.4DForm'
@@ -11,52 +10,69 @@ on:
       - '*/Project/Resources/**'
   workflow_dispatch:
     inputs:
-        use_self_hosted:
-            type: boolean
-            description: when github hosted runners are busy
-            required: true
-            default: false
-        mode:
-          type: choice
-          description: semantic versioning
-          options: 
-          - patch
-          - minor 
-          - major
-          required: true
+      use_self_hosted:
+        type: boolean
+        description: When GitHub-hosted runners are busy
+        default: false
+      mode:
+        type: choice
+        description: Component semantic version increment
+        options: [patch, minor, major]
+        default: patch
+        required: true
+      source_sha:
+        type: string
+        description: Optional main revision required by the native build workflow
+        default: ''
+      native_release_tag:
+        type: string
+        description: Optional exact native release tag (must match the source lock)
+        default: ''
 
-env: 
+permissions:
+  contents: write
+
+concurrency:
+  group: ollama-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
   project_path: ollama/Project/ollama.4DProject
-  
+
 jobs:
-
   publish:
-    if: ${{ github.event.inputs.use_self_hosted != 'true' }}
-    permissions: write-all
-    runs-on: [macos-latest]
+    if: github.repository == 'miyako/ollama' && github.ref == 'refs/heads/main'
+    runs-on: ${{ inputs.use_self_hosted && fromJSON('["self-hosted", "macos"]') || fromJSON('["macos-15"]') }}
+    timeout-minutes: 90
     steps:
-
       - name: configure
         id: configure
         uses: miyako/4D/.github/actions/bash/configure@v1
         with:
           mode: ${{ inputs.mode || 'patch' }}
-
-      - name: checkout 
-        uses: actions/checkout@v4
-
-      - name: set version
-        id: version
-        uses: miyako/4D/.github/actions/package-set-version@v1
+      - uses: actions/checkout@v4
         with:
-          mode: ${{ steps.configure.outputs.mode }}
-
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Require the expected main snapshot before changing the component version
+        env:
+          EXPECTED_SHA: ${{ inputs.source_sha || github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$EXPECTED_SHA"
+      - name: Prepare every native architecture before the component version bump
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NATIVE_RELEASE_TAG: ${{ inputs.native_release_tag }}
+        run: |
+          python scripts/native/install.py prepare --release-tag "$NATIVE_RELEASE_TAG" \
+            --destination .build/component-native
       - name: get tool version
         id: tool
         uses: miyako/4D/.github/actions/tool4d-get-version@v1
-        
       - name: get tool4d
-        id: get
         uses: miyako/4D/.github/actions/tool4d-download@v1
         with:
           platform: ${{ steps.tool.outputs.platform }}
@@ -64,87 +80,34 @@ jobs:
           version: ${{ steps.tool.outputs.version }}
           build: ${{ steps.tool.outputs.build }}
           arch: ${{ steps.tool.outputs.arch }}
-
-      - name: build
-        id: build
-        uses: miyako/4D/.github/actions/build-component@v1
-        with:
-          project_path: ${{ steps.configure.outputs.project_path }}
-          pack_project: 'true'
-          use_standard_zip: 'true'
-
-      - name: setup keychain 
-        id: keychain
-        uses: miyako/4D/.github/actions/deployment-setup-keychain@v1
-        with:
-          APPLE_DEVELOPER_ID_CERTIFICATE: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE }}
-          APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-
-      - name: codesign
-        id: codesign
-        uses: miyako/4D/.github/actions/deployment-codesign-product@v1
-        with: 
-          sign: ${{ secrets.CODESIGN_APPLE_ID }} 
-          apple_id: ${{ secrets.NOTARYTOOL_APPLE_ID }}         
-          team_id: ${{ secrets.NOTARYTOOL_TEAM_ID }}   
-          password: ${{ secrets.NOTARYTOOL_PASSWORD }}
-          product_path: ${{ steps.build.outputs.product_path }}
-          keychain: ${{ steps.keychain.outputs.KEYCHAIN_PATH }}
-          
-      - name: zip
-        id: zip
-        uses: miyako/4D/.github/actions/deployment-create-zip@v1
-        with: 
-          dmg_path: ${{ steps.codesign.outputs.dmg_path }}
-          zip_path: ${{ steps.codesign.outputs.zip_path }}
-
-      - name: upload assets
-        id: upload
-        uses: miyako/4D/.github/actions/deployment-release-assets@v1
-        with: 
-          dmg_path: ${{ steps.zip.outputs.dmg_path }}
-          zip_path: ${{ steps.zip.outputs.zip_path }}    
-          tag_name: ${{ steps.version.outputs.version }}   
-          release_name: ${{ steps.version.outputs.version }}  
+      - name: Reuse an unpublished version after a failed component build
+        id: component-version
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}    
-
-  publish-locally:
-    if: ${{ github.event.inputs.use_self_hosted == 'true' }}
-    permissions: write-all
-    runs-on: [self-hosted, macos]
-    steps:
-
-      - name: configure
-        id: configure
-        uses: miyako/4D/.github/actions/bash/configure@v1
-        with:
-          mode: ${{ inputs.mode || 'patch' }}
-
-      - name: checkout 
-        uses: actions/checkout@v4
-
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/native/component.py version
       - name: set version
         id: version
+        if: steps.component-version.outputs.bump == 'true'
         uses: miyako/4D/.github/actions/package-set-version@v1
+        env:
+          npm_config_message: |
+            Bump component version to %s
+
+            Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>
         with:
           mode: ${{ steps.configure.outputs.mode }}
-
-      - name: get tool version
-        id: tool
-        uses: miyako/4D/.github/actions/tool4d-get-version@v1
-        
-      - name: get tool4d
-        id: get
-        uses: miyako/4D/.github/actions/tool4d-download@v1
-        with:
-          platform: ${{ steps.tool.outputs.platform }}
-          branch: ${{ steps.tool.outputs.branch }}
-          version: ${{ steps.tool.outputs.version }}
-          build: ${{ steps.tool.outputs.build }}
-          arch: ${{ steps.tool.outputs.arch }}
-
+      - name: Reject a concurrent main update during the version commit
+        env:
+          EXPECTED_SHA: ${{ inputs.source_sha || github.sha }}
+          BUMPED: ${{ steps.component-version.outputs.bump }}
+        run: |
+          if [[ "$BUMPED" == true ]]; then
+            test "$(git rev-parse HEAD^)" = "$EXPECTED_SHA"
+          else
+            test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          fi
+      - name: Install complete native resources, replacing the packaged legacy binary
+        run: python scripts/native/install.py install .build/component-native ollama/Resources/bin
       - name: build
         id: build
         uses: miyako/4D/.github/actions/build-component@v1
@@ -152,40 +115,53 @@ jobs:
           project_path: ${{ steps.configure.outputs.project_path }}
           pack_project: 'true'
           use_standard_zip: 'true'
-
-      - name: setup keychain 
+      - name: Verify the actual built component includes all native runtime resources
+        env:
+          PRODUCT_PATH: ${{ steps.build.outputs.product_path }}
+        run: python scripts/native/install.py verify "$PRODUCT_PATH/Resources/bin"
+      - name: setup keychain
         id: keychain
         uses: miyako/4D/.github/actions/deployment-setup-keychain@v1
         with:
           APPLE_DEVELOPER_ID_CERTIFICATE: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE }}
           APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-
       - name: codesign
         id: codesign
         uses: miyako/4D/.github/actions/deployment-codesign-product@v1
-        with: 
-          sign: ${{ secrets.CODESIGN_APPLE_ID }} 
-          apple_id: ${{ secrets.NOTARYTOOL_APPLE_ID }}         
-          team_id: ${{ secrets.NOTARYTOOL_TEAM_ID }}   
+        with:
+          sign: ${{ secrets.CODESIGN_APPLE_ID }}
+          apple_id: ${{ secrets.NOTARYTOOL_APPLE_ID }}
+          team_id: ${{ secrets.NOTARYTOOL_TEAM_ID }}
           password: ${{ secrets.NOTARYTOOL_PASSWORD }}
           product_path: ${{ steps.build.outputs.product_path }}
           keychain: ${{ steps.keychain.outputs.KEYCHAIN_PATH }}
-          
+      - name: Require an accepted notarization ticket on the component DMG
+        env:
+          DMG: ${{ steps.codesign.outputs.dmg_path }}
+        run: |
+          xcrun stapler staple "$DMG"
+          xcrun stapler validate "$DMG"
       - name: zip
         id: zip
         uses: miyako/4D/.github/actions/deployment-create-zip@v1
-        with: 
+        with:
           dmg_path: ${{ steps.codesign.outputs.dmg_path }}
           zip_path: ${{ steps.codesign.outputs.zip_path }}
-
-      - name: upload assets
-        id: upload
-        uses: miyako/4D/.github/actions/deployment-release-assets@v1
-        with: 
-          dmg_path: ${{ steps.zip.outputs.dmg_path }}
-          zip_path: ${{ steps.zip.outputs.zip_path }}    
-          tag_name: ${{ steps.version.outputs.version }}   
-          release_name: ${{ steps.version.outputs.version }}  
+      - name: Verify signed ZIP resources and publish the complete component by release ID
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}    
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version || steps.component-version.outputs.version }}
+          DMG: ${{ steps.zip.outputs.dmg_path }}
+          ZIP: ${{ steps.zip.outputs.zip_path }}
+        run: |
+          python scripts/native/component.py publish --version "$VERSION" --dmg "$DMG" \
+            --zip "$ZIP" --manifest .build/component-native/native-source.json
+      - name: Remove signing keychain
+        if: always() && steps.keychain.outputs.KEYCHAIN_PATH != ''
+        env:
+          KEYCHAIN_PATH: ${{ steps.keychain.outputs.KEYCHAIN_PATH }}
+          CERTIFICATE_PATH: ${{ steps.keychain.outputs.CERTIFICATE_PATH }}
+        run: |
+          security delete-keychain "$KEYCHAIN_PATH"
+          rm -f "$CERTIFICATE_PATH"

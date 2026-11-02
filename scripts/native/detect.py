@@ -1,4 +1,4 @@
-"""Scheduled builds skip only a published native release of the exact recipe."""
+"""Trusted main builds reuse an existing immutable native source/recipe."""
 
 import json
 import os
@@ -30,9 +30,13 @@ def existing_release(repository, tag):
 def main():
     info = json.loads(Path(".build/source.json").read_text())
     build = True
-    if os.environ.get("EVENT") == "schedule":
+    if (os.environ.get("GITHUB_REF") == "refs/heads/main"
+            and os.environ.get("EVENT") in {"push", "schedule", "workflow_dispatch"}):
         release = existing_release(os.environ["GITHUB_REPOSITORY"], info["release_tag"])
-        build = release is None or release["draft"] or release["prerelease"]
+        if release is not None:
+            if release["draft"] or release["prerelease"]:
+                raise RuntimeError("Existing native release is not published stable; inspect/recover it explicitly")
+            build = False
     with open(os.environ["GITHUB_OUTPUT"], "a") as out:
         print(f"build={str(build).lower()}", file=out)
 

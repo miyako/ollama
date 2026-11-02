@@ -8,11 +8,13 @@
 Run the [Ollama](https://github.com/ollama/ollama) server/CLI from 4D.
 [4D usage and OpenAI-compatible API examples](https://miyako.github.io/ollama/).
 
-This repository has **two separate products**: the existing 4D component
-(`package.json`, version `20.1.5`, releases such as `20.1.5` with `ollama.zip`/`.dmg`)
-and independently built native server archives (`native-v…` releases).
-Native builds do not change the component version, commit binaries to the repository,
-or automatically replace its legacy bundled Intel executable.
+**Build Ollama from source** builds or reuses a verified native release, then
+automatically runs the ordinary **Publish** workflow when the 4D component needs
+that payload. Component releases (`ollama.zip`/`.dmg`) include the complete native
+server and runtime dependencies for all three targets. Native `native-v…` archives
+remain separately downloadable, immutable, and **not latest**; the normal 4D
+component release remains latest. There is no separate publish switch or second
+manual dispatch in the normal flow.
 
 ## Selected upstream source
 
@@ -21,7 +23,8 @@ on **2026-11-02**:
 **[v0.40.13](https://github.com/ollama/ollama/releases/tag/v0.40.13)**,
 published 2026-10-28, commit
 [`04088e7c9d41cba5d33bafbf788d87a465c79d5b`](https://github.com/ollama/ollama/commit/04088e7c9d41cba5d33bafbf788d87a465c79d5b).
-[The reviewed pin](scripts/native/upstream.json) is used for push/PR builds.
+[The source lock](scripts/native/upstream.json) is used for push/PR builds.
+Successful weekly/manual upstream adoption updates this small lock before component publication.
 It is not a claim that upstream `main` or this pin will always be the latest release.
 
 The [upstream development guide at that revision](https://github.com/ollama/ollama/blob/04088e7c9d41cba5d33bafbf788d87a465c79d5b/docs/development.md)
@@ -73,7 +76,8 @@ Each payload also contains `LICENSE`, `BUILD-INFO.json`, and (Windows)
 licenses, and MLX dependency notices where applicable. Keep them when redistributing.
 This repository's MIT license does not replace third-party license terms.
 
-For 4D, merge these platform directories into the component's
+Normal 4D component releases already contain these platform directories. To update
+an older component manually, merge them into the component's
 `ollama/Resources/bin/` (or its installed component `Resources/bin/`).
 The updated launcher prefers the matching macOS architecture directory and retains
 the old flat-directory lookup if the matching executable is absent. Both Mac archives can
@@ -93,30 +97,62 @@ On Intel substitute `macOS/x86_64/ollama-x86_64`. In PowerShell:
 macOS executables may need execute permissions restored by the unzip tool.
 There is **no Developer ID signing/notarization** in the native pipeline; Gatekeeper
 or Windows policy may block downloaded executables. Follow your organization's
-approval/signing process; the existing signed 4D DMG pipeline is separate.
+approval/signing process. The ordinary 4D component pipeline signs its macOS native
+code and submits the component DMG for notarization; it does not modify the unsigned
+native release assets. Component `native-source.json` records the original unsigned
+inputs, while component `SHA256SUMS` records the final signed ZIP/DMG bytes.
 4D itself and its component dependencies remain required for the 4D examples.
 
 ## GitHub Actions and publishing
 
 **Build Ollama from source** (`native-build.yml`):
 
-- PRs and relevant pushes to `main` build the reviewed pin on all three native runners.
+- PRs build the source lock on all three native runners, verify the release contract,
+  stage every runtime at the real `ollama.4dbase/Resources/bin` paths, and smoke the
+  staged ARM server. PRs cannot publish or change the component version.
+- Relevant pushes to `main` build the source lock and automatically publish after
+  the matrix, artifact-contract and component-layout checks pass.
 - Weekly runs resolve the latest *published stable* upstream release, excluding drafts
   and prereleases, then resolve its tag once to a full commit SHA before the matrix.
-  An already published matching `native-…-rN` release skips the scheduled build.
-  Unpublished updates remain eligible for rebuilds; no scheduled run publishes.
+  Successful builds automatically publish and adopt that native source in the component.
 - Manual runs use latest stable by default; `upstream_tag` selects an older stable
-  release and `expected_sha` optionally guards against a moved tag. Older releases
+  release and `expected_sha` optionally guards against a moved tag. Dispatch this
+  workflow from **`main`**; no `publish=true` input is needed. Older releases
   must support the current superbuild interface; incompatible layouts fail explicitly.
+- Trusted main runs reuse an already published matching `native-…-rN` release instead
+  of rebuilding/overwriting it. They still download and verify all nine native assets
+  and stage the complete component payload. Existing drafts block automation until
+  explicitly inspected/recovered.
 - Every run records source tag/SHA, upstream publication time and recipe commit;
   packages also record tool versions and fetched native revisions. Downloads include
   archives, per-archive SHA-256 sidecars and platform build manifests.
 
-To publish, dispatch from **`miyako/ollama`'s `main`** with **`publish=true`**.
-The reusable **Publish native Ollama release** workflow runs only after every native
-build and smoke check succeeds. Only its publishing job has `contents: write`.
-It verifies the complete three-target asset set, checksums and matching source/recipe
-metadata, creates a **new draft**, uploads all assets and then publishes it.
+After native publication/reuse, the workflow checks the latest component's
+`native-source.json` and archive checksum contract. If it already contains the
+identical verified payload, **both publication and component version bump are skipped**.
+Otherwise it dispatches the ordinary **Publish** workflow with the exact native tag
+and expected main revision. This is a genuine component update, using the existing
+patch-version convention, not a second native release. A newer stable source updates
+only the small source lock in Git; native binaries are not committed.
+
+**Publish** verifies/downloads the selected source lock's immutable native assets
+before bumping the component version, replaces the packaged legacy Intel binary
+with complete architecture-specific payloads, and verifies the actual built
+`.4dbase/Resources/bin` files. It signs/notarizes as before, verifies the final ZIP's
+complete native resources/signatures and server health, and publishes ZIP, DMG,
+`native-source.json` and `SHA256SUMS` together from a new draft.
+Normal component-source changes still use the existing automatic Publish trigger;
+manual Publish retains `mode` and `use_self_hosted`.
+
+Native and component workflows share one main release concurrency group.
+The native workflow **dispatches without waiting**; component Publish starts after
+the parent exits, avoiding a shared-lock deadlock. A changed main snapshot fails
+explicitly rather than publishing a stale component. No unrelated component version
+is bumped when native/component provenance already matches.
+
+Only the native/component publishing and native-adoption jobs have the necessary
+write permissions. The reusable native publisher creates a **new draft**, uploads all
+assets, checks their uploaded sizes/digests, and publishes it.
 Draft verification and finalization use the release ID, since GitHub's tag endpoint
 can return 404 until an unpublished draft's tag is created.
 Every successful matrix first runs the same artifact-contract verification in a
@@ -136,13 +172,35 @@ target, and compares all nine uploaded asset sizes and SHA-256 digests before pu
 by ID with `latest=false`. Recovery never uploads, replaces or deletes assets, and refuses
 published, incomplete or unexpected releases. Manifests retain the **original build
 recipe commit**; the recovery Actions run separately records the publishing-code revision.
+Rerun the normal build workflow afterward to adopt a recovered native release into the component.
 An incomplete draft must be inspected and handled explicitly; there is no overwrite switch.
 
-Use the Actions artifacts to review scheduled updates before publishing. To adopt a
-new default pin, update `scripts/native/upstream.json` with the verified stable tag,
-full SHA and publication date. Increment `recipe` for a new package of the same source.
+To propose a specific source lock, update `scripts/native/upstream.json` with the
+verified stable tag, full SHA and publication date. Increment `recipe` for a genuinely
+new native package of the same source, not merely to change component packaging.
 Changing SDKs/toolchains may change output bytes: revision recording makes the inputs
 auditable, **not bit-for-bit reproducible** across mutable hosted runner images.
+
+### Source-checkout development
+
+The tracked legacy Intel executable and launcher fallback remain unchanged for
+ordinary source checkouts; already-published component `20.1.5` is not retroactively
+modified. To stage the locked complete native release into a development component:
+
+```sh
+python3 scripts/native/install.py prepare --destination .build/component-native
+python3 scripts/native/install.py install .build/component-native ollama/Resources/bin
+```
+
+Staging replaces the checkout's platform binary directories; it is not a Git update.
+Do not commit the generated native payloads: MLX's `mlx.metallib` alone is about
+152 MB, exceeding GitHub's per-file Git limit. This is why component packaging stages
+verified release assets rather than copying the sibling repositories' binary-commit
+step literally. Missing assets, checksum/source mismatches or incomplete resources
+fail explicitly; published packages never fall back to the tracked legacy binary.
+The wiring follows [llama-cpp's build-to-Publish handoff](https://github.com/miyako/llama-cpp/blob/main/.github/workflows/build-cli.yml)
+and [onnx-genai's complete resource adoption](https://github.com/miyako/onnx-genai/blob/main/.github/workflows/server-cli.yml),
+using packaging-time staging for Ollama's larger runtime.
 
 ## Build and validate locally
 
@@ -162,7 +220,7 @@ git clone --branch v0.40.13 --depth 1 https://github.com/ollama/ollama.git .buil
 git -C .build/upstream checkout --detach 04088e7c9d41cba5d33bafbf788d87a465c79d5b
 python3 scripts/native/build.py --jobs 4
 python3 -m unittest discover -s scripts/native -p 'test_*.py' -v
-actionlint .github/workflows/native-build.yml .github/workflows/native-publish.yml
+actionlint .github/workflows/native-build.yml .github/workflows/native-publish.yml .github/workflows/publish.yml
 ```
 
 On Windows use `python` and add
