@@ -514,8 +514,9 @@ class ComponentIntegrationTests(unittest.TestCase):
                 + struct.pack(">III", 2, 82, 0)
                 + bytes(32))
 
-    def fixtures(self, downloads):
-        source_info = {**install.locked_source(), "recipe_sha": "b" * 40, "recipe_dirty": False}
+    def fixtures(self, downloads, source_info=None):
+        if source_info is None:
+            source_info = {**install.locked_source(), "recipe_sha": "b" * 40, "recipe_dirty": False}
         (downloads / "native-source").mkdir(parents=True)
         (downloads / "native-source/source.json").write_text(json.dumps(source_info))
         for target, (layout, binary) in install.LAYOUTS.items():
@@ -548,6 +549,72 @@ class ComponentIntegrationTests(unittest.TestCase):
             archive.with_suffix(".zip.sha256").write_text(
                 f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n")
         return source_info
+
+    def newer_source(self):
+        locked = install.locked_source()
+        major, minor, patch_version = map(int, locked["version"].split("."))
+        version = f"{major}.{minor}.{patch_version + 1}"
+        sha = "c" * 40
+        return {**locked, "tag": "v" + version, "version": version, "sha": sha,
+                "release_tag": f"native-v{version}-{sha[:12]}-r{locked['recipe']}",
+                "recipe_sha": "b" * 40, "recipe_dirty": False}
+
+    def test_cli_prepare_and_install_share_newer_resolved_source_without_adopting_lock(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            artifacts, prepared = root / "artifacts", root / "prepared"
+            info = self.fixtures(artifacts, self.newer_source())
+            selected = artifacts / "native-source/source.json"
+            destination = root / "ollama.4dbase/Resources/bin"
+            command = [sys.executable, str(source.ROOT / "scripts/native/install.py")]
+            subprocess.run([*command, "prepare", "--artifacts", str(artifacts),
+                            "--source", str(selected), "--destination", str(prepared)],
+                           check=True, capture_output=True, text=True)
+            rejected = subprocess.run([*command, "install", str(prepared), str(destination)],
+                                      capture_output=True, text=True)
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("does not match the selected source/recipe", rejected.stderr)
+            self.assertFalse(destination.exists())
+            subprocess.run([*command, "install", str(prepared), str(destination),
+                            "--source", str(selected)], check=True, capture_output=True, text=True)
+            subprocess.run([*command, "verify", str(destination)],
+                           check=True, capture_output=True, text=True)
+            self.assertEqual(install.verify_installed(destination)["source"], info)
+            self.assertNotEqual(install.locked_source()["sha"], info["sha"])
+
+    def test_cli_prepare_and_install_default_to_pinned_source(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            info = self.fixtures(root / "artifacts")
+            prepared, destination = root / "prepared", root / "installed"
+            with patch.object(sys, "argv", ["install.py", "prepare", "--artifacts",
+                                           str(root / "artifacts"), "--destination", str(prepared)]):
+                install.main()
+            with patch.object(sys, "argv", ["install.py", "install", str(prepared), str(destination)]):
+                install.main()
+            self.assertEqual(install.verify_installed(destination)["source"], info)
+
+    def test_cli_install_rejects_wrong_explicit_selection_before_replacing_resources(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            info = self.fixtures(root / "artifacts", self.newer_source())
+            prepared, destination = root / "prepared", root / "installed"
+            install.prepare(root / "artifacts", prepared, info)
+            destination.mkdir()
+            sentinel = destination / "untouched"
+            sentinel.write_text("existing resources")
+            selected = root / "selected.json"
+            for key, value in [("tag", "v0.0.1"), ("sha", "d" * 40),
+                               ("recipe", info["recipe"] + 1),
+                               ("release_tag", install.locked_source()["release_tag"])]:
+                with self.subTest(key=key):
+                    selected.write_text(json.dumps({**info, key: value}))
+                    with patch.object(sys, "argv", ["install.py", "install", str(prepared),
+                                                   str(destination), "--source", str(selected)]):
+                        with self.assertRaisesRegex(ValueError, "selected source/recipe"):
+                            install.main()
+                    self.assertEqual(list(destination.iterdir()), [sentinel])
+                    self.assertEqual(sentinel.read_text(), "existing resources")
 
     def test_complete_native_payload_replaces_legacy_component_executable(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -720,6 +787,32 @@ class ComponentIntegrationTests(unittest.TestCase):
                 with patch.object(component, "api", return_value={"object": {"sha": "c" * 40}}):
                     with self.assertRaisesRegex(RuntimeError, "main changed"):
                         component.dispatch(manifest)
+
+    def test_component_adopts_newer_source_lock_before_dispatching_pinned_publish(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            info = self.newer_source()
+            lock_path = root / "scripts/native/upstream.json"
+            lock_path.parent.mkdir(parents=True)
+            lock_path.write_text((source.ROOT / "scripts/native/upstream.json").read_text())
+            manifest = root / "native-source.json"
+            manifest.write_text(json.dumps({"source": info}))
+            env = {"GITHUB_REPOSITORY": "miyako/ollama", "GITHUB_REF": "refs/heads/main",
+                   "GITHUB_EVENT_NAME": "schedule", "GITHUB_SHA": "b" * 40}
+            with patch.dict(os.environ, env), patch.object(component, "ROOT", root), \
+                    patch.object(component, "component_matches", return_value=False), \
+                    patch.object(component, "api", return_value={"object": {"sha": "b" * 40}}), \
+                    patch.object(component.subprocess, "check_output",
+                                 side_effect=["b" * 40 + "\n", "d" * 40 + "\n"]), \
+                    patch.object(component.subprocess, "run") as command:
+                component.dispatch(manifest)
+            self.assertEqual(json.loads(lock_path.read_text()),
+                             {key: info[key] for key in ("repository", "tag", "sha", "published_at", "recipe")})
+            commands = [call.args[0] for call in command.call_args_list]
+            self.assertEqual(commands[-2], ["git", "push", "origin", "HEAD:refs/heads/main"])
+            self.assertEqual(commands[-1][:4], ["gh", "workflow", "run", "publish.yml"])
+            self.assertIn("source_sha=" + "d" * 40, commands[-1])
+            self.assertIn("native_release_tag=" + info["release_tag"], commands[-1])
 
     def test_latest_legacy_component_needs_native_adoption_but_partial_new_release_fails(self):
         with patch.object(component, "api", return_value={"tag_name": "20.1.5", "assets": []}):
