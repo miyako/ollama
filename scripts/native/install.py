@@ -165,13 +165,16 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     preparing = commands.add_parser("prepare")
     preparing.add_argument("--artifacts", type=Path)
-    preparing.add_argument("--source", type=Path)
+    preparing.add_argument("--source", type=Path,
+                           help="Resolved source JSON (default: checked-in upstream lock)")
     preparing.add_argument("--release-tag", default="")
     preparing.add_argument("--downloads", type=Path, default=Path(".build/native-release"))
     preparing.add_argument("--destination", type=Path, required=True)
     installing = commands.add_parser("install")
     installing.add_argument("prepared", type=Path)
     installing.add_argument("destination", type=Path)
+    installing.add_argument("--source", type=Path,
+                            help="Resolved source JSON used during prepare (default: checked-in upstream lock)")
     verifying = commands.add_parser("verify")
     verifying.add_argument("destination", type=Path)
     verifying.add_argument("--signed", action="store_true")
@@ -184,7 +187,8 @@ def main():
         manifest = prepare(downloads, args.destination, expected)
         print(f"Prepared all three native platforms from {manifest['source']['release_tag']}")
     elif args.command == "install":
-        validate_source(verify_installed(args.prepared)["source"], locked_source())
+        expected = json.loads(args.source.read_text()) if args.source else locked_source()
+        validate_source(verify_installed(args.prepared)["source"], expected)
         install(args.prepared, args.destination)
     else:
         verify_installed(args.destination, args.signed)

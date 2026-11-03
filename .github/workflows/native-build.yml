@@ -219,7 +219,8 @@ jobs:
         run: |
           python scripts/native/install.py prepare --artifacts .build/downloads \
             --source .build/downloads/native-source/source.json --destination .build/component-native
-          python scripts/native/install.py install .build/component-native .build/ollama.4dbase/Resources/bin
+          python scripts/native/install.py install .build/component-native .build/ollama.4dbase/Resources/bin \
+            --source .build/downloads/native-source/source.json
           python scripts/native/install.py verify .build/ollama.4dbase/Resources/bin
           python scripts/native/smoke.py .build/ollama.4dbase/Resources/bin/macOS/arm64/ollama \
             --version "${{ needs.source.outputs.version }}" --log .build/component-layout-smoke.log

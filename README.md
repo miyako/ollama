@@ -127,6 +127,14 @@ inputs, while component `SHA256SUMS` records the final signed ZIP/DMG bytes.
   packages also record tool versions and fetched native revisions. Downloads include
   archives, per-archive SHA-256 sidecars and platform build manifests.
 
+The layout integration job passes the same run-resolved `native-source/source.json`
+to both `install.py prepare --source ...` and `install.py install --source ...`.
+This validates weekly/manual selections before adoption, even when the checked-in
+lock still selects an older release. Omitting `--source` keeps both commands pinned
+to `scripts/native/upstream.json`; a prepared payload from another source/recipe is
+rejected before installation. Feature-ref manual runs exercise these read-only
+checks without publishing or adopting a release.
+
 After native publication/reuse, the workflow checks the latest component's
 `native-source.json` and archive checksum contract. If it already contains the
 identical verified payload, **both publication and component version bump are skipped**.
