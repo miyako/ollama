@@ -127,7 +127,7 @@ Else
     */
     
     $event.onError:=Formula(ALERT($2.message))
-    $event.onSuccess:=Formula(ALERT($2.models.extract("name").join(",")+" loaded!"))
+    $event.onSuccess:=Formula(ALERT($2.models.extract("name").join(",")+" pull finished"))  //not a readiness check; poll /api/tags
     $event.onData:=Formula(MESSAGE([$2.fileName; $2.percentage; "%"].join(" ")))
     $event.onTerminate:=Formula(LOG EVENT(Into 4D debug message; (["process"; $1.pid; "terminated!"].join(" "))))
     
@@ -147,6 +147,10 @@ Else
     
 End if 
 ```
+
+Unless a server is already running on the port, the constructor launches `ollama serve` and then runs `ollama pull` for each model. With no arguments it uses port `8080`, host `127.0.0.1` and the two models shown above. `event` may be `Null`, in which case no callbacks are delivered.
+
+`onSuccess` is called once per model when its `ollama pull` process finishes; it does not check the exit status and does not mean the model is loaded (ollama loads a model on its first request). `onData` reports pull progress. `onTerminate` is not taken from `event`; the server process only calls a function passed as `options.onTerminate`.
 
 Now you can test the server:
 

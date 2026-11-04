@@ -265,7 +265,7 @@ Ranked from concrete existing code evidence; these are **not implemented** here:
 
 | Priority | Proposal | Evidence / expected benefit |
 |---|---|---|
-| 1 — bug | Normalize constructor options and port before worker lookup and `_main` | `ollama.4dm` sets `This.options` but passes the original nullable `$options` to `_main`; `start.4dm` dereferences `$options.options.port`. Default `.new()` can lose normalized host/options; invalid ports are also checked only after `isRunning($port)`. Add default/invalid-port 4D regression cases. |
+| 1 — bug | Normalize the port before worker lookup | `ollama.4dm` now passes the normalized `This.options` to `_main`, but invalid ports (including the default `0`) are still checked only after `isRunning($port)`. Add invalid-port 4D regression cases. |
 | 2 — startup risk | Make the API-readiness contract explicit before model installation | `Methods/start.4dm` calls worker `start` then immediately `pull`; no API-ready check is visible here. Verify the external `workers.start` contract; if it only launches the process, slow startup can race installation. Add bounded `/api/version` polling with process-exit/error reporting. |
 | 3 — bug | Use the standard `ollama` PATH name on Intel fallback | `_ollama.4dm` chooses `ollama-x86_64`; `_CLI.4dm` uses that same name on PATH when no bundled file exists. A normal upstream installation exposes `ollama`, not that alias. Separate bundled filename from PATH command and test both layouts. |
 | 4 — feature | Signed/notarized native releases and model-backed inference tests | Native archives are unsigned and model-free health checks cannot verify tensor execution. Add gated signing and a separately budgeted small-model test per backend before adding CUDA/Vulkan/ROCm support. |
