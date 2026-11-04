@@ -24,7 +24,7 @@ Class constructor($port : Integer; $models : Collection; $options : Object; $eve
 		This:C1470.options.models:=$models
 		This:C1470.options.port:=$port
 		
-		This:C1470._main($port; $models; $options; $event)
+		This:C1470._main($port; $models; This:C1470.options; $event)
 		
 	End if 
 	

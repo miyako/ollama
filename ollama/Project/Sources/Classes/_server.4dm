@@ -35,7 +35,7 @@ Function start($option : Object) : 4D:C1709.SystemWorker
 		$env:="OLLAMA_"+Uppercase:C13($arg.key; *)
 		Case of 
 			: ($valueType=Is real:K8:4)
-				This:C1470.controller.variables[$env]:=String:C10($arg.value)
+				This:C1470.controller.variables[$env]:=_argNumber($arg.value)
 			: ($valueType=Is text:K8:3)
 				This:C1470.controller.variables[$env]:=$arg.value
 			: ($valueType=Is boolean:K8:9) && ($arg.value)
@@ -118,7 +118,7 @@ Function _simple($function : Text; $option : Variant; $formula : 4D:C1709.Functi
 			$env:="OLLAMA_"+Uppercase:C13($arg.key; *)
 			Case of 
 				: ($valueType=Is real:K8:4)
-					This:C1470.controller.variables[$env]:=String:C10($arg.value)
+					This:C1470.controller.variables[$env]:=_argNumber($arg.value)
 				: ($valueType=Is text:K8:3)
 					This:C1470.controller.variables[$env]:=$arg.value
 				: ($valueType=Is boolean:K8:9) && ($arg.value)
