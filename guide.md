@@ -1,15 +1,18 @@
 ---
 layout: default
+title: Use with 4D
+description: "Install and run Ollama from 4D: native builds, installation, the 4D class and AI Kit."
+guide: true
 ---
 
 ![version](https://img.shields.io/badge/version-20%2B-E23089)
 ![platform](https://img.shields.io/static/v1?label=platform&message=mac-intel%20|%20mac-arm%20|%20win-64&color=blue)
-[![license](https://img.shields.io/github/license/miyako/ollama)](LICENSE)
+[![license](https://img.shields.io/github/license/miyako/ollama)](https://github.com/miyako/ollama/blob/main/LICENSE)
 ![downloads](https://img.shields.io/github/downloads/miyako/ollama/total)
 
 # Use Ollama from 4D
 
-#### Abstract
+## Abstract
 
 [**Ollama**](https://github.com/ollama/ollama) is a lightweight, developer-friendly tool for running large language models (LLMs) locally. The backend is **llama.cpp** with a [**custom pipeline**](https://ollama.com/blog/multimodal-models) for multimodal models. 
 
@@ -21,7 +24,7 @@ Ollama has two main components:
 The REST server manages native inference subprocesses to handle loaded models.
 Current upstream source also includes an MLX engine on supported platforms.
 
-#### Native server builds and installation
+## Native server builds and installation
 
 The reviewed source is **[Ollama v0.40.13](https://github.com/ollama/ollama/releases/tag/v0.40.13)**,
 commit [`04088e7c9d41cba5d33bafbf788d87a465c79d5b`](https://github.com/ollama/ollama/commit/04088e7c9d41cba5d33bafbf788d87a465c79d5b),
@@ -34,11 +37,15 @@ The **Build Ollama from source** GitHub Actions workflow builds the real CMake
 superbuild, including the Go CLI/server, pinned llama.cpp helpers, libraries,
 licenses and (Apple Silicon) MLX/Metal assets. It does not repackage official binaries.
 
+<div class="table-wrap" markdown="1">
+
 | Target | Payload | Limitations |
 |---|---|---|
 | macOS ARM64 | Metal + MLX Metal v3 | macOS 14+, no Metal v4 overlay |
 | macOS Intel | CPU | macOS 14+, no Metal or MLX engine |
 | Windows x64 | CPU and required runtime DLLs | Windows 10/11 UCRT, no MLX engine |
+
+</div>
 
 For 4D, install the ordinary component `ollama.zip`/`.dmg`; it already includes
 these resources. For standalone use or manually updating an older component,
@@ -105,7 +112,7 @@ clone upstream at the recorded SHA, then run `python3 scripts/native/build.py`
 (Windows: add `--runtime-licenses C:/msys64/ucrt64/share/licenses`).
 [Full source-build, release, validation and follow-up proposal details](https://github.com/miyako/ollama#build-and-validate-locally).
 
-#### Usage
+## Usage
 
 Instantiate `cs.ollama.ollama` in your *On Startup* database method:
 
@@ -195,9 +202,11 @@ Finally to terminate the server:
 $ollama.terminate()
 ```
 
-#### AI Kit compatibility
+## AI Kit compatibility
 
 The API is compatible with [Open AI](https://platform.openai.com/docs/api-reference/embeddings). 
+
+<div class="table-wrap" markdown="1">
 
 |Class|API|Availability|
 |-|-|:-:|
@@ -207,3 +216,5 @@ The API is compatible with [Open AI](https://platform.openai.com/docs/api-refere
 |Moderations|`/v1/moderations`||
 |Embeddings|`/v1/embeddings`|✅|
 |Files|`v1/files`||
+
+</div>
