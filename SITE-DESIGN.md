@@ -13,7 +13,7 @@ Local implementation: [site styles](assets/css/style.scss),
 from generated Pages.
 
 Site branding: `assets/ollama.png` is an unchanged copy of the 4D project's
-`ollama/Resources/icon.png`, used for the sidebar, home-page engine icon, favicon, and structured
+`ollama/Resources/logo.png`, used for the sidebar, home-page engine icon, favicon, and structured
 metadata. Accent: blue (llama.cpp/Swama palette).
 
 The previous single-page documentation now lives in `guide.md` with its text
