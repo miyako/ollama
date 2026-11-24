@@ -1,7 +1,7 @@
 {
   "repository": "ollama/ollama",
-  "tag": "v0.40.16",
-  "sha": "d63b702609c4300a2ca07be2bdb0adb9834725e5",
-  "published_at": "2026-11-09T18:21:19Z",
+  "tag": "v0.40.18",
+  "sha": "924cc286cc592f49c481fa84e15fa60dbc75989e",
+  "published_at": "2026-11-24T04:18:13Z",
   "recipe": 2
 }
